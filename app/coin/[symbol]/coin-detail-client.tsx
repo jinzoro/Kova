@@ -1,9 +1,11 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import dynamic from 'next/dynamic'
 import { useCoinDetail } from '@/hooks/useCoinData'
 import { useKlines } from '@/hooks/useKlines'
+import { useStreamKlines } from '@/hooks/useStreamKlines'
+import { useStreamPrices } from '@/hooks/useStreamPrices'
 import CoinLogo from '@/components/ui/CoinLogo'
 import SignalScoreCard from '@/components/ui/SignalScoreCard'
 import VolumeSpike from '@/components/ui/VolumeSpike'
@@ -212,10 +214,50 @@ function ForecastPanel({ symbol, interval }: { symbol: string; interval: KlineIn
   )
 }
 
+/** Flashes green/red briefly when price changes */
+function LivePriceDisplay({ price, pct }: { price: number; pct: number }) {
+  const prevRef = useRef<number | null>(null)
+  const [flash, setFlash] = useState<'up' | 'down' | null>(null)
+
+  useEffect(() => {
+    if (prevRef.current !== null && price !== prevRef.current) {
+      setFlash(price > prevRef.current ? 'up' : 'down')
+      const t = setTimeout(() => setFlash(null), 700)
+      prevRef.current = price
+      return () => clearTimeout(t)
+    }
+    prevRef.current = price
+  }, [price])
+
+  const priceColor =
+    flash === 'up' ? 'text-bull' :
+    flash === 'down' ? 'text-bear' :
+    'text-gray-100'
+
+  const isUp = pct >= 0
+
+  return (
+    <div className="flex items-center gap-3 mt-1 flex-wrap">
+      <span className={`text-2xl font-mono font-bold transition-colors duration-100 ${priceColor}`}>
+        {fmtPrice(price)}
+      </span>
+      <span className={isUp ? 'badge-bull' : 'badge-bear'}>
+        {isUp ? '▲' : '▼'} {Math.abs(pct).toFixed(2)}% 24h
+      </span>
+    </div>
+  )
+}
+
 export default function CoinDetailClient({ symbol }: Props) {
   const [interval, setInterval] = useState<KlineInterval>('1h')
   const { data: coin, isLoading, isError, refetch } = useCoinDetail(symbol)
-  const { data: klines, isLoading: klinesLoading } = useKlines(symbol, interval, 200)
+
+  // 350 candles so EMA 200 has ~150 visible data points (needs period candles to seed)
+  const { klines, isLoading: klinesLoading } = useStreamKlines(symbol, interval, 350)
+
+  // Live WebSocket price for the header (overrides stale CoinPaprika price)
+  const streamPrices = useStreamPrices([symbol.toUpperCase()])
+  const liveStream = streamPrices[symbol.toUpperCase()]
 
   const score = useMemo(() => {
     if (!klines || klines.length < 30) return null
@@ -247,9 +289,11 @@ export default function CoinDetailClient({ symbol }: Props) {
   }
 
   const md = coin.market_data
-  const price = md.current_price.usd
-  const pct = md.price_change_percentage_24h
-  const isUp = pct >= 0
+  // Use WebSocket live price when available, fall back to CoinPaprika REST
+  const price = liveStream?.price ?? md.current_price.usd
+  // Use WebSocket 24h change when available (computed from 24h open vs current)
+  const pct = liveStream?.change24h ?? md.price_change_percentage_24h
+  const wsConnected = !!liveStream
 
   return (
     <div className="space-y-8 animate-fade-in">
@@ -267,13 +311,16 @@ export default function CoinDetailClient({ symbol }: Props) {
                   Rank #{coin.market_cap_rank}
                 </span>
               )}
-            </div>
-            <div className="flex items-center gap-3 mt-1 flex-wrap">
-              <span className="text-2xl font-mono font-bold text-gray-100">{fmtPrice(price)}</span>
-              <span className={isUp ? 'badge-bull' : 'badge-bear'}>
-                {isUp ? '▲' : '▼'} {Math.abs(pct).toFixed(2)}% 24h
+              {/* Live feed indicator */}
+              <span
+                title={wsConnected ? 'Price streaming live' : 'Connecting to live feed...'}
+                className={`inline-flex items-center gap-1 text-xs ${wsConnected ? 'text-green-500' : 'text-gray-600'}`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`} />
+                {wsConnected ? 'Live' : 'Connecting'}
               </span>
             </div>
+            <LivePriceDisplay price={price} pct={pct} />
           </div>
           <FundingRateBadge symbol={symbol} />
         </div>

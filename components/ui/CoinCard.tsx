@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import CoinLogo from '@/components/ui/CoinLogo'
 import type { CoinMarket } from '@/lib/coingecko'
+import { useEffect, useRef, useState } from 'react'
 
 function Sparkline({ prices }: { prices: number[] }) {
   if (!prices || prices.length < 2) return null
@@ -49,10 +50,44 @@ function fmtPrice(n: number): string {
 
 interface Props {
   coin: CoinMarket
+  /** Live price from WebSocket — overrides the stale REST price */
+  livePrice?: number
+  /** Live 24h change % from WebSocket */
+  liveChange?: number
 }
 
-export default function CoinCard({ coin }: Props) {
-  const pct = coin.price_change_percentage_24h ?? 0
+/** Flashes green/red briefly when price changes */
+function LivePrice({ price, decimals = 2 }: { price: number; decimals?: number }) {
+  const prevRef = useRef<number | null>(null)
+  const [flash, setFlash] = useState<'up' | 'down' | null>(null)
+
+  useEffect(() => {
+    if (prevRef.current !== null && price !== prevRef.current) {
+      setFlash(price > prevRef.current ? 'up' : 'down')
+      const t = setTimeout(() => setFlash(null), 600)
+      prevRef.current = price
+      return () => clearTimeout(t)
+    }
+    prevRef.current = price
+  }, [price])
+
+  const colorClass =
+    flash === 'up'
+      ? 'text-bull'
+      : flash === 'down'
+      ? 'text-bear'
+      : 'text-gray-100'
+
+  return (
+    <span className={`font-mono font-semibold text-base transition-colors duration-100 ${colorClass}`}>
+      {fmtPrice(price)}
+    </span>
+  )
+}
+
+export default function CoinCard({ coin, livePrice, liveChange }: Props) {
+  const price = livePrice ?? coin.current_price
+  const pct = liveChange ?? coin.price_change_percentage_24h ?? 0
   const isUp = pct >= 0
 
   return (
@@ -75,9 +110,7 @@ export default function CoinCard({ coin }: Props) {
 
         <div className="flex items-end justify-between">
           <div>
-            <div className="font-mono font-semibold text-base text-gray-100">
-              {fmtPrice(coin.current_price)}
-            </div>
+            <LivePrice price={price} />
             <div className="text-xs text-gray-500 mt-0.5">
               MCap: {fmt(coin.market_cap)}
             </div>

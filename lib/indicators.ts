@@ -282,3 +282,223 @@ export function getNearestSRLevels(
 
   return { resistance: resistances, support: supports }
 }
+
+// ─── VWAP ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Cumulative Volume-Weighted Average Price.
+ * tp = (high + low + close) / 3
+ * VWAP = Σ(tp × volume) / Σ(volume)
+ *
+ * Resets when the calendar day (UTC) changes — so on 1h/4h charts each day
+ * starts a fresh VWAP, matching the standard intraday interpretation.
+ * On 1d/1w charts it accumulates across all candles (less conventional but still useful).
+ */
+export function calcVWAP(klines: Kline[]): number[] {
+  const result: number[] = new Array(klines.length).fill(NaN)
+  let cumTpV = 0
+  let cumV = 0
+  let prevDay = -1
+
+  for (let i = 0; i < klines.length; i++) {
+    const k = klines[i]
+    const day = Math.floor(k.openTime / 86_400_000) // UTC day index
+
+    if (day !== prevDay) {
+      // New session — reset accumulator
+      cumTpV = 0
+      cumV = 0
+      prevDay = day
+    }
+
+    const tp = (k.high + k.low + k.close) / 3
+    cumTpV += tp * k.volume
+    cumV += k.volume
+    result[i] = cumV === 0 ? NaN : cumTpV / cumV
+  }
+  return result
+}
+
+// ─── ADX ─────────────────────────────────────────────────────────────────────
+
+export interface ADXResult {
+  adx: number    // Trend strength 0-100 (>25 = trending, >50 = strong)
+  plusDI: number  // +DI (bullish directional pressure)
+  minusDI: number // -DI (bearish directional pressure)
+}
+
+/**
+ * Average Directional Index (Wilder, period=14).
+ * adx > 25 → trending; < 20 → ranging/choppy.
+ * +DI > -DI → bullish trend; -DI > +DI → bearish trend.
+ */
+export function calcADX(klines: Kline[], period = 14): ADXResult[] {
+  const n = klines.length
+  const result: ADXResult[] = new Array(n).fill({ adx: NaN, plusDI: NaN, minusDI: NaN })
+  if (n < period * 2) return result
+
+  const tr: number[] = [0]
+  const plusDM: number[] = [0]
+  const minusDM: number[] = [0]
+
+  for (let i = 1; i < n; i++) {
+    const { high, low } = klines[i]
+    const prevHigh = klines[i - 1].high
+    const prevLow = klines[i - 1].low
+    const prevClose = klines[i - 1].close
+
+    const upMove = high - prevHigh
+    const downMove = prevLow - low
+
+    plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0)
+    minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0)
+    tr.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)))
+  }
+
+  // Wilder smooth over `period`
+  const smooth = (arr: number[]) => {
+    const out: number[] = new Array(n).fill(NaN)
+    let sum = arr.slice(1, period + 1).reduce((a, b) => a + b, 0)
+    out[period] = sum
+    for (let i = period + 1; i < n; i++) {
+      sum = sum - sum / period + arr[i]
+      out[i] = sum
+    }
+    return out
+  }
+
+  const smoothTR = smooth(tr)
+  const smoothPlus = smooth(plusDM)
+  const smoothMinus = smooth(minusDM)
+
+  const dx: number[] = new Array(n).fill(NaN)
+  for (let i = period; i < n; i++) {
+    const sTR = smoothTR[i]
+    if (!sTR) continue
+    const pdi = (smoothPlus[i] / sTR) * 100
+    const mdi = (smoothMinus[i] / sTR) * 100
+    const dxVal = Math.abs(pdi - mdi) / (pdi + mdi || 1) * 100
+    dx[i] = dxVal
+    result[i] = { adx: NaN, plusDI: pdi, minusDI: mdi }
+  }
+
+  // Smooth DX → ADX
+  let adxSum = dx.slice(period, period * 2).filter(v => !isNaN(v)).reduce((a, b) => a + b, 0)
+  const firstADXIdx = period * 2 - 1
+  if (firstADXIdx < n) {
+    let adx = adxSum / period
+    const r0 = result[firstADXIdx]
+    result[firstADXIdx] = { ...r0, adx }
+    for (let i = firstADXIdx + 1; i < n; i++) {
+      if (isNaN(dx[i])) continue
+      adx = (adx * (period - 1) + dx[i]) / period
+      result[i] = { ...result[i], adx }
+    }
+  }
+
+  return result
+}
+
+// ─── Williams %R ──────────────────────────────────────────────────────────────
+
+/**
+ * Williams Percent Range. Range: 0 to -100.
+ * > -20 → overbought; < -80 → oversold.
+ */
+export function calcWilliamsR(klines: Kline[], period = 14): number[] {
+  return klines.map((_, i) => {
+    if (i < period - 1) return NaN
+    const slice = klines.slice(i - period + 1, i + 1)
+    const highest = Math.max(...slice.map(k => k.high))
+    const lowest = Math.min(...slice.map(k => k.low))
+    if (highest === lowest) return -50
+    return ((highest - klines[i].close) / (highest - lowest)) * -100
+  })
+}
+
+// ─── Fibonacci Retracement Levels ─────────────────────────────────────────────
+
+export interface FibLevel {
+  ratio: number
+  price: number
+  label: string
+}
+
+/**
+ * Fibonacci retracement levels from the recent high/low (last `lookback` candles).
+ */
+export function calcFibLevels(
+  klines: Kline[],
+  lookback = 50,
+): { high: number; low: number; levels: FibLevel[] } {
+  const slice = klines.slice(-lookback)
+  const high = Math.max(...slice.map(k => k.high))
+  const low  = Math.min(...slice.map(k => k.low))
+  const diff = high - low
+  return {
+    high, low,
+    levels: [
+      { r: 0,     label: '0%'    },
+      { r: 0.236, label: '23.6%' },
+      { r: 0.382, label: '38.2%' },
+      { r: 0.5,   label: '50%'   },
+      { r: 0.618, label: '61.8%' },
+      { r: 0.786, label: '78.6%' },
+      { r: 1,     label: '100%'  },
+    ].map(({ r, label }) => ({ ratio: r, price: high - diff * r, label })),
+  }
+}
+
+// ─── Pivot Points (Classic) ───────────────────────────────────────────────────
+
+export interface PivotPoints {
+  pp: number
+  r1: number; r2: number; r3: number
+  s1: number; s2: number; s3: number
+}
+
+/** Classic daily pivot points based on the most recently closed candle. */
+export function calcPivotPoints(klines: Kline[]): PivotPoints {
+  const last = klines.length >= 2 ? klines[klines.length - 2] : klines[klines.length - 1]
+  const { high: h, low: l, close: c } = last
+  const pp = (h + l + c) / 3
+  return {
+    pp,
+    r1: 2 * pp - l,   r2: pp + (h - l),       r3: h + 2 * (pp - l),
+    s1: 2 * pp - h,   s2: pp - (h - l),        s3: l - 2 * (h - pp),
+  }
+}
+
+// ─── RSI Divergence Detection ─────────────────────────────────────────────────
+
+export type DivergenceSignal = 'bullish' | 'bearish' | null
+
+/**
+ * Bearish divergence: price makes higher high but RSI makes lower high.
+ * Bullish divergence: price makes lower low but RSI makes higher low.
+ */
+export function detectRSIDivergence(
+  klines: Kline[],
+  rsiValues: number[],
+  lookback = 40,
+): DivergenceSignal {
+  const n = Math.min(klines.length, rsiValues.length, lookback)
+  if (n < 20) return null
+  const pSlice = klines.slice(-n)
+  const rSlice = rsiValues.slice(-n)
+  const mid = Math.floor(n / 2)
+  const valid = (arr: number[]) => arr.filter(v => !isNaN(v))
+
+  const phPrev   = Math.max(...pSlice.slice(0, mid).map(k => k.high))
+  const phRecent = Math.max(...pSlice.slice(mid).map(k => k.high))
+  const plPrev   = Math.min(...pSlice.slice(0, mid).map(k => k.low))
+  const plRecent = Math.min(...pSlice.slice(mid).map(k => k.low))
+  const rhPrev   = Math.max(...valid(rSlice.slice(0, mid)))
+  const rhRecent = Math.max(...valid(rSlice.slice(mid)))
+  const rlPrev   = Math.min(...valid(rSlice.slice(0, mid)))
+  const rlRecent = Math.min(...valid(rSlice.slice(mid)))
+
+  if (phRecent > phPrev * 1.002 && rhRecent < rhPrev - 3) return 'bearish'
+  if (plRecent < plPrev * 0.998 && rlRecent > rlPrev + 3) return 'bullish'
+  return null
+}

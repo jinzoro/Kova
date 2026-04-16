@@ -1,7 +1,11 @@
 'use client'
 
 import type { Kline } from '@/lib/binance'
-import { calcEMA, calcRSI, calcMACD, calcATR, calcBollingerBands } from '@/lib/indicators'
+import {
+  calcEMA, calcRSI, calcMACD, calcATR, calcBollingerBands,
+  calcADX, calcStochRSI, calcOBV, calcWilliamsR,
+  calcFibLevels, calcPivotPoints, detectRSIDivergence,
+} from '@/lib/indicators'
 import { detectPatterns, analyzeTrend } from '@/lib/patterns'
 import type { CandlePattern } from '@/lib/patterns'
 
@@ -76,14 +80,30 @@ export default function TechnicalSummary({ klines, symbol }: Props) {
   const atr = calcATR(klines, 14)
   const bb = calcBollingerBands(closes, 20, 2)
 
-  const lastRSI = rsi[rsi.length - 1]
-  const lastMACD = macd[macd.length - 1]
-  const lastATR = atr[atr.length - 1]
-  const lastBB = bb[bb.length - 1]
-  const lastEMA12 = ema12[ema12.length - 1]
-  const lastEMA26 = ema26[ema26.length - 1]
-  const lastEMA50 = ema50[ema50.length - 1]
+  // Extended indicators
+  const adx       = calcADX(klines, 14)
+  const stochRSI  = calcStochRSI(closes, 14, 3, 3)
+  const obv       = calcOBV(klines)
+  const willR     = calcWilliamsR(klines, 14)
+  const fib       = calcFibLevels(klines, 50)
+  const pivots    = calcPivotPoints(klines)
+  const divergence = detectRSIDivergence(klines, rsi, 40)
+
+  const lastRSI   = rsi[rsi.length - 1]
+  const lastMACD  = macd[macd.length - 1]
+  const lastATR   = atr[atr.length - 1]
+  const lastBB    = bb[bb.length - 1]
+  const lastEMA12  = ema12[ema12.length - 1]
+  const lastEMA26  = ema26[ema26.length - 1]
+  const lastEMA50  = ema50[ema50.length - 1]
   const lastEMA200 = ema200[ema200.length - 1]
+
+  // Extended last values
+  const lastADX      = adx[adx.length - 1]
+  const lastStoch    = stochRSI[stochRSI.length - 1]
+  const lastOBV      = obv[obv.length - 1]
+  const prevOBV      = obv[obv.length - 6] ?? 0   // 5-period OBV trend
+  const lastWillR    = willR[willR.length - 1]
 
   // Patterns
   const patterns = detectPatterns(klines, 15)
@@ -331,6 +351,272 @@ export default function TechnicalSummary({ klines, symbol }: Props) {
             </div>
           </div>
         )}
+      </div>
+
+      {/* ── Divergence Alert ─────────────────────────────────────────────── */}
+      {divergence && (
+        <div className={`card border ${divergence === 'bullish' ? 'border-green-500/40 bg-green-500/5' : 'border-amber-500/40 bg-amber-500/5'}`}>
+          <div className="flex items-start gap-3">
+            <span className="text-2xl leading-none mt-0.5">{divergence === 'bullish' ? '📈' : '📉'}</span>
+            <div>
+              <div className={`text-sm font-bold ${divergence === 'bullish' ? 'text-bull' : 'text-warn'}`}>
+                {divergence === 'bullish' ? 'Bullish RSI Divergence Detected' : 'Bearish RSI Divergence Detected'}
+              </div>
+              <p className="text-xs text-gray-400 mt-1 leading-relaxed">
+                {divergence === 'bullish'
+                  ? 'Price made a lower low but RSI made a higher low — selling momentum is weakening. This is a classic early reversal signal. Confirm with volume and structure before acting.'
+                  : 'Price made a higher high but RSI made a lower high — buying momentum is fading on the way up. This is a bearish warning sign. Watch for a potential trend reversal or distribution phase.'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ADX + Directional Index ───────────────────────────────────────── */}
+      {lastADX && !isNaN(lastADX.adx) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="card space-y-3">
+            <h3 className="text-sm font-semibold text-gray-300">ADX — Trend Strength</h3>
+            <div className="flex items-center gap-4">
+              <div className="text-center shrink-0">
+                <div className={`text-3xl font-mono font-bold ${
+                  lastADX.adx > 50 ? 'text-bull' :
+                  lastADX.adx > 25 ? 'text-blue-400' :
+                  'text-gray-400'
+                }`}>
+                  {lastADX.adx.toFixed(0)}
+                </div>
+                <div className="text-xs text-gray-500 mt-0.5">ADX (14)</div>
+              </div>
+              <div className="flex-1 space-y-2 text-xs">
+                <div>
+                  <div className="flex justify-between mb-1">
+                    <span className="text-bull">+DI (bullish)</span>
+                    <span className="font-mono font-bold text-bull">{lastADX.plusDI.toFixed(1)}</span>
+                  </div>
+                  <div className="h-1.5 bg-surface-muted rounded-full overflow-hidden">
+                    <div className="h-full bg-bull rounded-full" style={{ width: `${Math.min(100, lastADX.plusDI)}%` }} />
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between mb-1">
+                    <span className="text-bear">−DI (bearish)</span>
+                    <span className="font-mono font-bold text-bear">{lastADX.minusDI.toFixed(1)}</span>
+                  </div>
+                  <div className="h-1.5 bg-surface-muted rounded-full overflow-hidden">
+                    <div className="h-full bg-bear rounded-full" style={{ width: `${Math.min(100, lastADX.minusDI)}%` }} />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 leading-relaxed">
+              {lastADX.adx < 20
+                ? 'ADX below 20 — market is ranging/choppy. Trend-following strategies have low edge here.'
+                : lastADX.adx < 25
+                  ? 'ADX borderline — weak trend developing. Wait for confirmation above 25.'
+                  : lastADX.adx < 40
+                    ? `ADX ${lastADX.adx.toFixed(0)} — ${lastADX.plusDI > lastADX.minusDI ? 'bullish' : 'bearish'} trend in play. ${lastADX.plusDI > lastADX.minusDI ? '+DI dominant' : '-DI dominant'}, trend-following is valid.`
+                    : lastADX.adx < 60
+                      ? `ADX ${lastADX.adx.toFixed(0)} — strong trend. ${lastADX.plusDI > lastADX.minusDI ? 'Bulls are firmly in control.' : 'Bears are firmly in control.'}`
+                      : `ADX ${lastADX.adx.toFixed(0)} — extremely strong trend. Momentum is very high; watch for exhaustion near round numbers.`}
+            </p>
+          </div>
+
+          {/* Stochastic RSI */}
+          <div className="card space-y-3">
+            <h3 className="text-sm font-semibold text-gray-300">Stochastic RSI</h3>
+            {lastStoch && !isNaN(lastStoch.k) ? (
+              <>
+                <div className="space-y-2 text-xs">
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <span className="text-blue-400">%K (fast)</span>
+                      <span className={`font-mono font-bold ${lastStoch.k > 80 ? 'text-bear' : lastStoch.k < 20 ? 'text-bull' : 'text-blue-300'}`}>
+                        {lastStoch.k.toFixed(1)}
+                      </span>
+                    </div>
+                    <div className="h-1.5 bg-surface-muted rounded-full overflow-hidden relative">
+                      <div className="absolute h-full w-px bg-gray-600" style={{ left: '80%' }} />
+                      <div className="absolute h-full w-px bg-gray-600" style={{ left: '20%' }} />
+                      <div className="h-full bg-blue-500 rounded-full" style={{ width: `${lastStoch.k}%` }} />
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <span className="text-orange-400">%D (signal)</span>
+                      <span className={`font-mono font-bold ${lastStoch.d > 80 ? 'text-bear' : lastStoch.d < 20 ? 'text-bull' : 'text-orange-300'}`}>
+                        {lastStoch.d.toFixed(1)}
+                      </span>
+                    </div>
+                    <div className="h-1.5 bg-surface-muted rounded-full overflow-hidden">
+                      <div className="h-full bg-orange-500 rounded-full" style={{ width: `${lastStoch.d}%` }} />
+                    </div>
+                  </div>
+                </div>
+                <div className="flex justify-between text-xs text-gray-600 font-mono">
+                  <span>Oversold (20)</span>
+                  <span>Overbought (80)</span>
+                </div>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  {lastStoch.k > 80 && lastStoch.d > 80
+                    ? 'Both lines above 80 — overbought. A %K cross below %D here is a short-term sell signal.'
+                    : lastStoch.k < 20 && lastStoch.d < 20
+                      ? 'Both lines below 20 — oversold. A %K cross above %D here is a short-term buy signal.'
+                      : lastStoch.k > lastStoch.d
+                        ? '%K above %D — short-term bullish momentum. Watch for overbought cross.'
+                        : '%K below %D — short-term bearish momentum. Watch for oversold cross.'}
+                </p>
+              </>
+            ) : (
+              <div className="text-xs text-gray-600">Insufficient data (need 28+ candles)</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── OBV + Williams %R ──────────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="card space-y-3">
+          <h3 className="text-sm font-semibold text-gray-300">OBV — Volume Pressure</h3>
+          <div className="flex items-center gap-4">
+            <div className="text-center shrink-0">
+              <div className={`text-2xl leading-none ${lastOBV > prevOBV ? 'text-bull' : 'text-bear'}`}>
+                {lastOBV > prevOBV ? '↑' : '↓'}
+              </div>
+              <div className="text-xs text-gray-500 mt-1">Trend</div>
+            </div>
+            <div className="flex-1 text-xs text-gray-400 leading-relaxed">
+              {lastOBV > prevOBV
+                ? 'OBV is rising — buyers are absorbing more volume than sellers over the last 5 periods. Smart money may be accumulating.'
+                : 'OBV is falling — sellers are dominant on volume. Distribution may be occurring; be cautious on longs.'}
+              {Math.abs(lastOBV - prevOBV) / Math.max(Math.abs(prevOBV), 1) > 0.05 && (
+                <span className="block mt-1 font-medium">Significant 5-period OBV shift detected — trend has conviction.</span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {!isNaN(lastWillR) && (
+          <div className="card space-y-3">
+            <h3 className="text-sm font-semibold text-gray-300">Williams %R</h3>
+            <div className="space-y-1">
+              <MeterBar
+                label={`W%R (14) — ${lastWillR > -20 ? 'Overbought' : lastWillR < -80 ? 'Oversold' : 'Neutral'}`}
+                value={-lastWillR}
+                min={0}
+                max={100}
+                lowColor="text-bear"
+                highColor="text-bull"
+              />
+              <div className="flex justify-between text-xs text-gray-600 font-mono">
+                <span>Overbought (0 to -20)</span>
+                <span>Oversold (-80 to -100)</span>
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 leading-relaxed">
+              {lastWillR > -20
+                ? `W%R at ${lastWillR.toFixed(1)} — severely overbought. High probability of a short-term pullback.`
+                : lastWillR < -80
+                  ? `W%R at ${lastWillR.toFixed(1)} — oversold. Potential bounce zone, watch for confirmation candle.`
+                  : `W%R at ${lastWillR.toFixed(1)} — neutral territory. No extreme reading.`}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* ── Fibonacci Retracement ─────────────────────────────────────────── */}
+      <div className="card space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-gray-300">Fibonacci Retracement</h3>
+          <span className="text-xs text-gray-600">Based on last 50 candles</span>
+        </div>
+        <div className="text-xs text-gray-500 mb-2">
+          Swing: <span className="font-mono text-bear">${fmtPrice(fib.low)}</span>
+          {' → '}
+          <span className="font-mono text-bull">${fmtPrice(fib.high)}</span>
+          <span className="ml-2 text-gray-600">({(((fib.high - fib.low) / fib.low) * 100).toFixed(2)}% range)</span>
+        </div>
+        <div className="space-y-0.5">
+          {fib.levels.map(({ ratio, price: lvlPrice, label }) => {
+            const isCurrentZone = Math.abs(price - lvlPrice) / price < 0.005
+            const abovePrice = lvlPrice > price
+            const isMajor = [0.382, 0.5, 0.618].includes(ratio)
+            return (
+              <div
+                key={label}
+                className={`flex items-center justify-between px-3 py-1.5 rounded-lg text-xs ${
+                  isCurrentZone ? 'bg-amber-500/15 border border-amber-500/30' :
+                  isMajor ? 'bg-surface-muted' : ''
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <span className={`font-mono w-12 ${isMajor ? 'font-bold text-gray-200' : 'text-gray-500'}`}>
+                    {label}
+                  </span>
+                  {isCurrentZone && (
+                    <span className="text-xs text-amber-400 font-medium">← current zone</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className={`font-mono ${abovePrice ? 'text-bear' : 'text-bull'}`}>
+                    ${fmtPrice(lvlPrice)}
+                  </span>
+                  <span className="text-gray-600 w-20 text-right">
+                    {abovePrice ? '+' : ''}{(((lvlPrice - price) / price) * 100).toFixed(2)}%
+                  </span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        <p className="text-xs text-gray-600">
+          Fibonacci levels act as natural support and resistance. The 38.2%, 50%, and 61.8% levels are the most significant. Price near a major fib level combined with volume confirmation is a high-probability trade setup.
+        </p>
+      </div>
+
+      {/* ── Pivot Points ──────────────────────────────────────────────────── */}
+      <div className="card space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-gray-300">Pivot Points (Classic)</h3>
+          <span className="text-xs text-gray-600">Based on previous candle</span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+          {/* Resistances */}
+          {[
+            { label: 'R3', value: pivots.r3, isRes: true },
+            { label: 'R2', value: pivots.r2, isRes: true },
+            { label: 'R1', value: pivots.r1, isRes: true },
+          ].map(({ label, value, isRes }) => (
+            <div key={label} className={`p-2 rounded-lg text-center ${Math.abs(price - value) / price < 0.005 ? 'bg-bear/20 border border-bear/30' : 'bg-red-500/8 border border-red-500/15'}`}>
+              <div className="text-gray-500 font-mono">{label}</div>
+              <div className="font-mono font-bold text-bear mt-0.5">${fmtPrice(value)}</div>
+              <div className="text-gray-600 mt-0.5">{isRes && ((value - price) / price * 100).toFixed(2)}%</div>
+            </div>
+          ))}
+          {/* PP */}
+          <div className={`p-2 rounded-lg text-center ${Math.abs(price - pivots.pp) / price < 0.003 ? 'bg-blue-500/20 border border-blue-500/30' : 'bg-blue-500/8 border border-blue-500/20'}`}>
+            <div className="text-gray-400 font-mono font-bold">PP</div>
+            <div className="font-mono font-bold text-blue-300 mt-0.5">${fmtPrice(pivots.pp)}</div>
+            <div className="text-gray-600 mt-0.5">{((pivots.pp - price) / price * 100).toFixed(2)}%</div>
+          </div>
+          {/* Supports */}
+          {[
+            { label: 'S1', value: pivots.s1 },
+            { label: 'S2', value: pivots.s2 },
+            { label: 'S3', value: pivots.s3 },
+          ].map(({ label, value }) => (
+            <div key={label} className={`p-2 rounded-lg text-center ${Math.abs(price - value) / price < 0.005 ? 'bg-bull/20 border border-bull/30' : 'bg-green-500/8 border border-green-500/15'}`}>
+              <div className="text-gray-500 font-mono">{label}</div>
+              <div className="font-mono font-bold text-bull mt-0.5">${fmtPrice(value)}</div>
+              <div className="text-gray-600 mt-0.5">{((value - price) / price * 100).toFixed(2)}%</div>
+            </div>
+          ))}
+        </div>
+        <p className="text-xs text-gray-600">
+          {price > pivots.pp
+            ? `Price is above the Pivot Point — bullish bias for this session. R1 at $${fmtPrice(pivots.r1)} is the next major target.`
+            : `Price is below the Pivot Point — bearish bias for this session. S1 at $${fmtPrice(pivots.s1)} is the nearest key support.`}
+        </p>
       </div>
 
       {/* ── Candlestick Patterns ─────────────────────────────────────────── */}
