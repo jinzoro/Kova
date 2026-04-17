@@ -8,7 +8,9 @@ import CoinCard from '@/components/ui/CoinCard'
 import FearGreedGauge from '@/components/ui/FearGreedGauge'
 import BtcMiniChart from '@/components/charts/BtcMiniChart'
 import MarketHeatmap from '@/components/ui/MarketHeatmap'
+import CorrelationMatrix from '@/components/ui/CorrelationMatrix'
 import CoinLogo from '@/components/ui/CoinLogo'
+import { useSparklines } from '@/hooks/useSparklines'
 import Link from 'next/link'
 import { useState, useEffect, useRef } from 'react'
 
@@ -429,9 +431,12 @@ const SYMBOL_TO_STREAM: Record<string, string> = {
   ada: 'ADA',
 }
 
+const WATCHLIST_SYMBOLS = ['BTC', 'ETH', 'SOL', 'BNB', 'ADA']
+
 function WatchlistGrid({ stream }: { stream: ReturnType<typeof useStreamPrices> }) {
   const DEFAULT_IDS = ['bitcoin', 'ethereum', 'solana', 'binancecoin', 'cardano']
   const { data: coins, isLoading, isError, refetch } = useWatchlist(DEFAULT_IDS)
+  const { data: sparklines } = useSparklines(WATCHLIST_SYMBOLS)
 
   if (isLoading) {
     return (
@@ -457,10 +462,14 @@ function WatchlistGrid({ stream }: { stream: ReturnType<typeof useStreamPrices> 
       {coins?.map((coin) => {
         const streamKey = SYMBOL_TO_STREAM[coin.symbol.toLowerCase()]
         const live = streamKey ? stream[streamKey] : undefined
+        const sparklineData = sparklines?.[coin.symbol.toUpperCase()]
+        const coinWithSpark = sparklineData
+          ? { ...coin, sparkline_in_7d: { price: sparklineData } }
+          : coin
         return (
           <CoinCard
             key={coin.id}
-            coin={coin}
+            coin={coinWithSpark}
             livePrice={live?.price}
             liveChange={live?.change24h}
           />
@@ -480,6 +489,9 @@ function QuickNav() {
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-sm font-semibold text-gray-300">Quick Analyze</h2>
         <div className="flex items-center gap-3">
+          <Link href="/screener" className="text-xs text-purple-400 hover:text-purple-300 transition-colors">
+            Screener →
+          </Link>
           <Link href="/alerts" className="text-xs text-amber-400 hover:text-amber-300 transition-colors">
             ⚡ Alerts
           </Link>
@@ -580,6 +592,9 @@ export default function DashboardClient() {
 
       {/* Market heatmap */}
       <MarketHeatmap />
+
+      {/* Correlation matrix */}
+      <CorrelationMatrix />
 
       {/* Watchlist — stream prices override stale REST prices */}
       <div>

@@ -13,6 +13,7 @@ interface NewsArticle {
   thumbnail: string | null
   tags: string[]
   body: string
+  sentiment?: { score: number; label: 'Bullish' | 'Bearish' | 'Neutral' }
 }
 
 const TAGS = ['All', 'Bitcoin', 'Ethereum', 'DeFi', 'NFT', 'Regulation']
@@ -82,6 +83,15 @@ function NewsCard({ article }: { article: NewsArticle }) {
               {tag}
             </span>
           ))}
+          {article.sentiment && article.sentiment.label !== 'Neutral' && (
+            <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+              article.sentiment.label === 'Bullish'
+                ? 'bg-green-500/10 text-bull'
+                : 'bg-red-500/10 text-bear'
+            }`}>
+              {article.sentiment.label}
+            </span>
+          )}
         </div>
       </div>
     </a>

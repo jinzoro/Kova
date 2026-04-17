@@ -10,6 +10,8 @@
  *   3. CMC fallback if CoinPaprika has no ticker data
  */
 
+import { fetch24hTicker } from './binance'
+
 const BASE = 'https://api.coinpaprika.com/v1'
 
 async function cpFetch<T>(path: string, revalidate = 60): Promise<T> {
@@ -95,6 +97,9 @@ interface CPTicker {
   name: string
   symbol: string
   rank: number
+  circulating_supply: number | null
+  total_supply: number | null
+  max_supply: number | null
   quotes: {
     USD: {
       price: number
@@ -230,11 +235,13 @@ export async function fetchCoinDetail(symbolOrSlug: string): Promise<CoinDetail>
   const symbol = symbolOrSlug.toUpperCase().split('-')[0]
 
   try {
-    const [coin, ticker] = await Promise.all([
+    const [coin, ticker, binanceTickers] = await Promise.all([
       cpFetch<CPCoin>(`/coins/${id}`, 60),
       cpFetch<CPTicker>(`/tickers/${id}?quotes=USD`, 60),
+      fetch24hTicker(symbol).catch(() => null),
     ])
     const usd = ticker.quotes.USD
+    const b = binanceTickers?.[0]
     const logo = logoUrl(id)
     return {
       id,
@@ -246,14 +253,14 @@ export async function fetchCoinDetail(symbolOrSlug: string): Promise<CoinDetail>
         current_price: { usd: usd.price },
         market_cap: { usd: usd.market_cap },
         total_volume: { usd: usd.volume_24h },
-        high_24h: { usd: usd.price * 1.01 },
-        low_24h: { usd: usd.price * 0.99 },
+        high_24h: { usd: b ? parseFloat(b.highPrice) : usd.price },
+        low_24h: { usd: b ? parseFloat(b.lowPrice) : usd.price },
         price_change_percentage_24h: usd.percent_change_24h,
         ath: { usd: usd.ath_price ?? usd.price },
         ath_change_percentage: { usd: usd.percent_from_price_ath ?? 0 },
-        circulating_supply: 0,
-        total_supply: null,
-        max_supply: null,
+        circulating_supply: ticker.circulating_supply ?? ticker.total_supply ?? 0,
+        total_supply: ticker.total_supply ?? null,
+        max_supply: ticker.max_supply ?? null,
       },
       description: { en: coin.description ?? '' },
     }
@@ -282,12 +289,19 @@ export async function searchCoins(query: string): Promise<SearchResult> {
 }
 
 export async function fetchGlobal(): Promise<GlobalData> {
-  const g = await cpFetch<CPGlobal>('/global', 120)
+  const [g, ethTicker] = await Promise.all([
+    cpFetch<CPGlobal>('/global', 120),
+    cpFetch<CPTicker>('/tickers/eth-ethereum?quotes=USD', 120).catch(() => null),
+  ])
+  const ethDominance =
+    ethTicker && g.market_cap_usd > 0
+      ? (ethTicker.quotes.USD.market_cap / g.market_cap_usd) * 100
+      : 0
   return {
     data: {
       total_market_cap: { usd: g.market_cap_usd },
       total_volume: { usd: g.volume_24h_usd },
-      market_cap_percentage: { btc: g.bitcoin_dominance_percentage, eth: 0 },
+      market_cap_percentage: { btc: g.bitcoin_dominance_percentage, eth: ethDominance },
       market_cap_change_percentage_24h_usd: g.market_cap_change_24h ?? 0,
     },
   }
@@ -319,8 +333,8 @@ function tickerToCoinMarket(t: CPTicker): CoinMarket {
     low_24h: usd.price,
     ath: usd.ath_price ?? usd.price,
     ath_change_percentage: usd.percent_from_price_ath ?? 0,
-    circulating_supply: 0,
-    total_supply: null,
+    circulating_supply: t.circulating_supply ?? t.total_supply ?? 0,
+    total_supply: t.total_supply ?? null,
   }
 }
 

@@ -267,18 +267,25 @@ export function getNearestSRLevels(
   count = 3,
 ): { resistance: SRLevel[]; support: SRLevel[] } {
   const swings = detectSwingLevels(klines)
+  const tolerance = 0.01 // 1% zone for counting touches
+
+  function countTouches(price: number, type: 'high' | 'low'): number {
+    return swings.filter(
+      (s) => s.type === type && Math.abs(s.price - price) / price <= tolerance,
+    ).length
+  }
 
   const resistances = swings
     .filter((s) => s.type === 'high' && s.price > currentPrice)
     .sort((a, b) => a.price - b.price)
     .slice(0, count)
-    .map((s) => ({ price: s.price, type: 'resistance' as const, strength: 1 }))
+    .map((s) => ({ price: s.price, type: 'resistance' as const, strength: countTouches(s.price, 'high') }))
 
   const supports = swings
     .filter((s) => s.type === 'low' && s.price < currentPrice)
     .sort((a, b) => b.price - a.price)
     .slice(0, count)
-    .map((s) => ({ price: s.price, type: 'support' as const, strength: 1 }))
+    .map((s) => ({ price: s.price, type: 'support' as const, strength: countTouches(s.price, 'low') }))
 
   return { resistance: resistances, support: supports }
 }
@@ -467,6 +474,155 @@ export function calcPivotPoints(klines: Kline[]): PivotPoints {
     r1: 2 * pp - l,   r2: pp + (h - l),       r3: h + 2 * (pp - l),
     s1: 2 * pp - h,   s2: pp - (h - l),        s3: l - 2 * (h - pp),
   }
+}
+
+// ─── Squeeze Momentum (Lazybear) ──────────────────────────────────────────────
+
+export interface SqueezeResult {
+  momentum: number
+  sqzOn: boolean   // BB inside KC = active squeeze
+  sqzOff: boolean  // squeeze just released
+  rising: boolean  // momentum increasing
+}
+
+function rollingMax(arr: number[], period: number): number[] {
+  return arr.map((_, i) => {
+    if (i < period - 1) return NaN
+    return Math.max(...arr.slice(i - period + 1, i + 1))
+  })
+}
+
+function rollingMin(arr: number[], period: number): number[] {
+  return arr.map((_, i) => {
+    if (i < period - 1) return NaN
+    return Math.min(...arr.slice(i - period + 1, i + 1))
+  })
+}
+
+function linreg(values: number[]): number {
+  const n = values.length
+  if (n === 0) return NaN
+  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0
+  for (let i = 0; i < n; i++) {
+    sumX += i; sumY += values[i]; sumXY += i * values[i]; sumX2 += i * i
+  }
+  const denom = n * sumX2 - sumX * sumX
+  if (denom === 0) return values[n - 1]
+  const slope = (n * sumXY - sumX * sumY) / denom
+  const intercept = (sumY - slope * sumX) / n
+  return intercept + slope * (n - 1)
+}
+
+export function calcSqueezeMomentum(
+  klines: Kline[],
+  bbPeriod = 20,
+  bbMult = 2.0,
+  kcPeriod = 20,
+  kcMult = 1.5,
+): SqueezeResult[] {
+  const closes = klines.map((k) => k.close)
+  const highs = klines.map((k) => k.high)
+  const lows = klines.map((k) => k.low)
+
+  const bbs = calcBollingerBands(closes, bbPeriod, bbMult)
+  const emaArr = calcEMA(closes, kcPeriod)
+  const atrArr = calcATR(klines, kcPeriod)
+  const hhArr = rollingMax(highs, kcPeriod)
+  const llArr = rollingMin(lows, kcPeriod)
+
+  const momentums: number[] = new Array(klines.length).fill(NaN)
+
+  // Precompute midpoint diffs for linreg
+  const diffs: number[] = klines.map((k, i) => {
+    if (isNaN(hhArr[i]) || isNaN(llArr[i]) || isNaN(emaArr[i])) return NaN
+    const mid = ((hhArr[i] + llArr[i]) / 2 + emaArr[i]) / 2
+    return k.close - mid
+  })
+
+  for (let i = kcPeriod - 1; i < klines.length; i++) {
+    const window = diffs.slice(i - kcPeriod + 1, i + 1)
+    if (window.some((v) => isNaN(v))) continue
+    momentums[i] = linreg(window)
+  }
+
+  return klines.map((_, i) => {
+    const bb = bbs[i]
+    const ema = emaArr[i]
+    const atr = atrArr[i]
+
+    if (isNaN(bb?.upper) || isNaN(ema) || isNaN(atr)) {
+      return { momentum: NaN, sqzOn: false, sqzOff: false, rising: false }
+    }
+
+    const kcUpper = ema + kcMult * atr
+    const kcLower = ema - kcMult * atr
+    const sqzOn = bb.upper < kcUpper && bb.lower > kcLower
+    const prevSqzOn = i > 0 ? (bbs[i - 1]?.upper < emaArr[i - 1] + kcMult * atrArr[i - 1]) : false
+    const sqzOff = !sqzOn && prevSqzOn
+
+    const mom = momentums[i]
+    const prevMom = i > 0 ? momentums[i - 1] : NaN
+    const rising = !isNaN(mom) && !isNaN(prevMom) && mom > prevMom
+
+    return { momentum: mom, sqzOn, sqzOff, rising }
+  })
+}
+
+// ─── Ichimoku Cloud ───────────────────────────────────────────────────────────
+
+export interface IchimokuResult {
+  tenkan: number   // conversion line (9-period midpoint)
+  kijun: number    // base line (26-period midpoint)
+  senkouA: number  // cloud A at current bar (computed from 26 bars ago)
+  senkouB: number  // cloud B at current bar (computed from 26 bars ago)
+  chikou: number   // lagging span: close from 26 bars ago
+}
+
+export function calcIchimoku(
+  klines: Kline[],
+  tenkanPeriod = 9,
+  kijunPeriod = 26,
+  senkouBPeriod = 52,
+): IchimokuResult[] {
+  const highs = klines.map((k) => k.high)
+  const lows = klines.map((k) => k.low)
+
+  const hhT = rollingMax(highs, tenkanPeriod)
+  const llT = rollingMin(lows, tenkanPeriod)
+  const hhK = rollingMax(highs, kijunPeriod)
+  const llK = rollingMin(lows, kijunPeriod)
+  const hhB = rollingMax(highs, senkouBPeriod)
+  const llB = rollingMin(lows, senkouBPeriod)
+
+  return klines.map((k, i) => {
+    const tenkan = isNaN(hhT[i]) ? NaN : (hhT[i] + llT[i]) / 2
+    const kijun  = isNaN(hhK[i]) ? NaN : (hhK[i] + llK[i]) / 2
+
+    const prev = i - kijunPeriod
+    const tenkanPrev = prev >= 0 && !isNaN(hhT[prev]) ? (hhT[prev] + llT[prev]) / 2 : NaN
+    const kijunPrev  = prev >= 0 && !isNaN(hhK[prev]) ? (hhK[prev] + llK[prev]) / 2 : NaN
+    const senkouA    = !isNaN(tenkanPrev) && !isNaN(kijunPrev) ? (tenkanPrev + kijunPrev) / 2 : NaN
+    const senkouB    = prev >= 0 && !isNaN(hhB[prev]) ? (hhB[prev] + llB[prev]) / 2 : NaN
+    const chikou     = prev >= 0 ? klines[prev].close : NaN
+
+    return { tenkan, kijun, senkouA, senkouB, chikou }
+  })
+}
+
+// ─── CVD (Cumulative Volume Delta) ────────────────────────────────────────────
+
+/**
+ * Volume delta per candle: positive = net buying pressure, negative = selling pressure.
+ * Uses the candle's position within the wick range as a buy/sell proxy.
+ */
+export function calcCVD(klines: Kline[]): { delta: number; cvd: number }[] {
+  let cvd = 0
+  return klines.map((k) => {
+    const range = k.high - k.low
+    const delta = range === 0 ? 0 : ((k.close - k.low) - (k.high - k.close)) / range * k.volume
+    cvd += delta
+    return { delta, cvd }
+  })
 }
 
 // ─── RSI Divergence Detection ─────────────────────────────────────────────────

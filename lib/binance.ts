@@ -82,6 +82,29 @@ export async function fetchPrice(symbol: string): Promise<number> {
   return parseFloat(data.price)
 }
 
+export interface OpenInterest {
+  symbol: string
+  openInterest: string  // raw string from API
+  time: number
+}
+
+/** Fetch current open interest from Binance Futures */
+export async function fetchOpenInterest(symbol: string): Promise<OpenInterest | null> {
+  const sym = symbol.toUpperCase().endsWith('USDT')
+    ? symbol.toUpperCase()
+    : `${symbol.toUpperCase()}USDT`
+  try {
+    const res = await fetch(
+      `${FUTURES_BASE}/openInterest?symbol=${sym}`,
+      { next: { revalidate: 60 } },
+    )
+    if (!res.ok) return null
+    return await res.json() as OpenInterest
+  } catch {
+    return null
+  }
+}
+
 /** Fetch latest funding rate from Binance Futures */
 export async function fetchFundingRate(symbol: string): Promise<FundingRate | null> {
   const sym = symbol.toUpperCase().endsWith('USDT')
@@ -95,16 +118,6 @@ export async function fetchFundingRate(symbol: string): Promise<FundingRate | nu
     if (!res.ok) return null
     const data: FundingRate[] = await res.json()
     return data[0] ?? null
-  } catch {
-    return null
-  }
-}
-
-/** Fetch global BTC dominance from Binance (approximate via CMC-style calc) */
-export async function fetchBtcDominance(): Promise<number | null> {
-  try {
-    // Binance doesn't expose this directly; we get it from CoinGecko global
-    return null
   } catch {
     return null
   }

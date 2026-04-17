@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { scoreSentiment } from '@/lib/sentiment'
 
 export const runtime = 'nodejs'
 export const revalidate = 1800  // 30 min cache
@@ -43,16 +44,20 @@ export async function GET(req: NextRequest) {
       imageurl?: string
       categories: string
       body: string
-    }) => ({
-      id: String(a.id),
-      title: a.title,
-      url: a.url,
-      source: a.source_info?.name ?? 'Unknown',
-      publishedAt: new Date(a.published_on * 1000).toISOString(),
-      thumbnail: a.imageurl || null,
-      tags: a.categories.split('|').filter(Boolean),
-      body: a.body?.slice(0, 250) ?? '',
-    }))
+    }) => {
+      const sentiment = scoreSentiment(`${a.title} ${a.body ?? ''}`)
+      return {
+        id: String(a.id),
+        title: a.title,
+        url: a.url,
+        source: a.source_info?.name ?? 'Unknown',
+        publishedAt: new Date(a.published_on * 1000).toISOString(),
+        thumbnail: a.imageurl || null,
+        tags: a.categories.split('|').filter(Boolean),
+        body: a.body?.slice(0, 250) ?? '',
+        sentiment: { score: sentiment.score, label: sentiment.label },
+      }
+    })
 
     return NextResponse.json({ articles })
   } catch (err) {

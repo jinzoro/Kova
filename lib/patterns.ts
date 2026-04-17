@@ -4,6 +4,7 @@
  */
 
 import type { Kline } from './binance'
+import { calcOBV, calcATR } from './indicators'
 
 export interface CandlePattern {
   name: string
@@ -397,4 +398,85 @@ export function analyzeTrend(klines: Kline[], ema12: number[], ema26: number[], 
     recentBodyAvg,
     description: descriptions[phase],
   }
+}
+
+// ─── Wyckoff Phase Detection ──────────────────────────────────────────────────
+
+export type WyckoffPhase = 'Accumulation' | 'Markup' | 'Distribution' | 'Markdown' | 'Undetermined'
+
+export interface WyckoffAnalysis {
+  phase: WyckoffPhase
+  confidence: 'High' | 'Medium' | 'Low'
+  description: string
+}
+
+function avg(arr: number[]): number {
+  return arr.length === 0 ? 0 : arr.reduce((a, b) => a + b, 0) / arr.length
+}
+
+export function detectWyckoffPhase(klines: Kline[]): WyckoffAnalysis {
+  const lookback = Math.min(klines.length, 60)
+  const slice = klines.slice(-lookback)
+  if (slice.length < 20) {
+    return { phase: 'Undetermined', confidence: 'Low', description: 'Not enough data for Wyckoff analysis.' }
+  }
+
+  const closes = slice.map((k) => k.close)
+  const highs  = slice.map((k) => k.high)
+  const lows   = slice.map((k) => k.low)
+  const volumes = slice.map((k) => k.volume)
+
+  const highest = Math.max(...highs)
+  const lowest  = Math.min(...lows)
+  const priceRange = highest - lowest || 1
+  const current = closes[closes.length - 1]
+  const pricePos = (current - lowest) / priceRange  // 0=bottom, 1=top
+
+  // OBV trend: compare first half vs second half
+  const obv = calcOBV(slice)
+  const obvMid  = obv[Math.floor(obv.length / 2)]
+  const obvEnd  = obv[obv.length - 1]
+  const obvTrendUp = obvEnd > obvMid
+
+  // ATR: contracting (ranging) vs expanding (trending)
+  const atr = calcATR(slice, 14).filter((v) => !isNaN(v))
+  const atrFirst = avg(atr.slice(0, Math.floor(atr.length / 2)))
+  const atrLast  = avg(atr.slice(Math.floor(atr.length / 2)))
+  const atrExpanding = atrLast > atrFirst * 1.1
+
+  // Volume: recent surge vs earlier
+  const volRecent = avg(volumes.slice(-5))
+  const volOld    = avg(volumes.slice(0, 20))
+  const volSurge  = volRecent > volOld * 1.2
+
+  // Price momentum over the full slice
+  const priceChange = (current - closes[0]) / (closes[0] || 1)
+
+  let phase: WyckoffPhase
+  let confidence: 'High' | 'Medium' | 'Low'
+  let description: string
+
+  if (pricePos < 0.3 && obvTrendUp && !atrExpanding) {
+    phase = 'Accumulation'
+    confidence = volSurge ? 'High' : 'Medium'
+    description = 'Price is near the range low with rising OBV and contracting volatility — classic accumulation characteristics. Smart money appears to be building positions quietly before the next markup.'
+  } else if (priceChange > 0.04 && obvTrendUp && atrExpanding) {
+    phase = 'Markup'
+    confidence = pricePos > 0.3 && pricePos < 0.85 ? 'High' : 'Medium'
+    description = 'Price is trending upward with rising OBV and expanding volatility — textbook markup phase. Demand is absorbing supply; pullbacks to the rising EMA are buy opportunities.'
+  } else if (pricePos > 0.7 && (!obvTrendUp || !atrExpanding)) {
+    phase = 'Distribution'
+    confidence = !obvTrendUp && !atrExpanding ? 'High' : 'Medium'
+    description = 'Price is near the range high with weakening OBV and contracting volatility — potential distribution. Smart money may be offloading into retail buying. Watch for a sign of weakness (SOW) candle.'
+  } else if (priceChange < -0.04 && !obvTrendUp) {
+    phase = 'Markdown'
+    confidence = atrExpanding ? 'High' : 'Medium'
+    description = 'Price is in sustained decline with falling OBV — markdown phase. Supply is overwhelming demand. Avoid longs until price shows a spring (false breakdown) or OBV divergence.'
+  } else {
+    phase = 'Undetermined'
+    confidence = 'Low'
+    description = 'Market structure does not clearly map to a single Wyckoff phase. Price may be transitioning between phases or too compressed for reliable classification.'
+  }
+
+  return { phase, confidence, description }
 }

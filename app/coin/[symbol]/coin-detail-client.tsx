@@ -6,14 +6,19 @@ import { useCoinDetail } from '@/hooks/useCoinData'
 import { useKlines } from '@/hooks/useKlines'
 import { useStreamKlines } from '@/hooks/useStreamKlines'
 import { useStreamPrices } from '@/hooks/useStreamPrices'
+import { useAlerts } from '@/hooks/useAlerts'
 import CoinLogo from '@/components/ui/CoinLogo'
 import SignalScoreCard from '@/components/ui/SignalScoreCard'
 import VolumeSpike from '@/components/ui/VolumeSpike'
 import SupportResistance from '@/components/ui/SupportResistance'
 import FundingRateBadge from '@/components/ui/FundingRate'
+import FuturesPanel from '@/components/ui/FuturesPanel'
 import TechnicalSummary from '@/components/ui/TechnicalSummary'
+import CVDChart from '@/components/charts/CVDChart'
 import { scoreSignal, calcMTFConsensus } from '@/lib/scoring'
 import { calcHoltWinters } from '@/lib/forecast'
+import toast from 'react-hot-toast'
+import Link from 'next/link'
 import type { KlineInterval } from '@/lib/binance'
 
 const CandlestickChart = dynamic(() => import('@/components/charts/CandlestickChart'), { ssr: false })
@@ -248,6 +253,57 @@ function LivePriceDisplay({ price, pct }: { price: number; pct: number }) {
   )
 }
 
+function AlertButton({ symbol, price }: { symbol: string; price: number }) {
+  const { addAlert } = useAlerts()
+  const [open, setOpen] = useState(false)
+  const [target, setTarget] = useState('')
+
+  const handleSet = () => {
+    const t = parseFloat(target)
+    if (!t || t <= 0) return
+    addAlert(symbol.toUpperCase(), t, price)
+    toast.success(`Alert set for ${symbol.toUpperCase()} at $${t.toLocaleString()}`, { icon: '🔔' })
+    setTarget('')
+    setOpen(false)
+  }
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="btn-ghost text-xs flex items-center gap-1 text-amber-400 hover:text-amber-300"
+        title="Set price alert"
+      >
+        🔔 Alert
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-2 w-56 bg-surface-card border border-surface-border rounded-xl shadow-xl z-20 p-3 space-y-2">
+          <div className="text-xs text-gray-400 font-medium">Set Alert for {symbol.toUpperCase()}</div>
+          <div className="text-xs text-gray-500">Current: ${price.toLocaleString('en-US', { maximumFractionDigits: 4 })}</div>
+          <input
+            type="number"
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+            placeholder="Target price (USD)"
+            className="input text-xs w-full"
+            step="any"
+            min="0"
+            onKeyDown={(e) => e.key === 'Enter' && handleSet()}
+            autoFocus
+          />
+          <div className="flex gap-2">
+            <button onClick={handleSet} className="btn-primary text-xs flex-1" disabled={!target}>Set</button>
+            <button onClick={() => setOpen(false)} className="btn-ghost text-xs flex-1">Cancel</button>
+          </div>
+          <Link href="/alerts" className="block text-xs text-blue-400 hover:text-blue-300 text-center pt-1">
+            Manage alerts →
+          </Link>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function CoinDetailClient({ symbol }: Props) {
   const [interval, setInterval] = useState<KlineInterval>('1h')
   const { data: coin, isLoading, isError, refetch } = useCoinDetail(symbol)
@@ -323,6 +379,7 @@ export default function CoinDetailClient({ symbol }: Props) {
             <LivePriceDisplay price={price} pct={pct} />
           </div>
           <FundingRateBadge symbol={symbol} />
+          <AlertButton symbol={symbol} price={price} />
         </div>
       </div>
 
@@ -377,6 +434,8 @@ export default function CoinDetailClient({ symbol }: Props) {
           {klines && <VolumeSpike klines={klines} />}
           {klines && <SupportResistance klines={klines} currentPrice={price} />}
         </div>
+        {klines && klines.length > 2 && <CVDChart klines={klines} />}
+        <FuturesPanel symbol={symbol} />
       </Section>
 
       {/* ── Multi-Timeframe ────────────────────────────────────────────── */}

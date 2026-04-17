@@ -5,8 +5,9 @@ import {
   calcEMA, calcRSI, calcMACD, calcATR, calcBollingerBands,
   calcADX, calcStochRSI, calcOBV, calcWilliamsR,
   calcFibLevels, calcPivotPoints, detectRSIDivergence,
+  calcSqueezeMomentum, calcIchimoku,
 } from '@/lib/indicators'
-import { detectPatterns, analyzeTrend } from '@/lib/patterns'
+import { detectPatterns, analyzeTrend, detectWyckoffPhase } from '@/lib/patterns'
 import type { CandlePattern } from '@/lib/patterns'
 
 interface Props {
@@ -110,6 +111,18 @@ export default function TechnicalSummary({ klines, symbol }: Props) {
 
   // Trend analysis
   const trend = analyzeTrend(klines, ema12, ema26, ema200)
+
+  // Squeeze Momentum
+  const squeeze = calcSqueezeMomentum(klines)
+  const lastSqz = squeeze[squeeze.length - 1]
+
+  // Ichimoku Cloud
+  const ichimoku = calcIchimoku(klines)
+  const lastIchi = ichimoku[ichimoku.length - 1]
+  const prevIchi = ichimoku[ichimoku.length - 2]
+
+  // Wyckoff Phase
+  const wyckoff = detectWyckoffPhase(klines)
 
   // ATR % of price (volatility)
   const atrPct = !isNaN(lastATR) ? (lastATR / price) * 100 : null
@@ -632,6 +645,150 @@ export default function TechnicalSummary({ klines, symbol }: Props) {
           <p className="text-xs text-gray-600">
             Patterns are more reliable at confirmed support/resistance levels with above-average volume.
           </p>
+        </div>
+      )}
+
+      {/* ── Squeeze Momentum ─────────────────────────────────────────────── */}
+      {lastSqz && !isNaN(lastSqz.momentum) && (
+        <div className="card space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-300">Squeeze Momentum (Lazybear)</h3>
+            <span className={`text-xs font-medium px-2 py-0.5 rounded border ${
+              lastSqz.sqzOn
+                ? 'bg-amber-500/10 text-warn border-amber-500/30'
+                : lastSqz.sqzOff
+                  ? 'bg-blue-500/10 text-blue-300 border-blue-500/30'
+                  : 'bg-gray-500/10 text-gray-400 border-gray-500/20'
+            }`}>
+              {lastSqz.sqzOn ? 'SQUEEZE ON' : lastSqz.sqzOff ? 'SQUEEZE FIRED' : 'No Squeeze'}
+            </span>
+          </div>
+          <div className="flex items-center gap-6">
+            <div className="text-center">
+              <div className={`text-2xl font-mono font-bold ${lastSqz.momentum > 0 ? 'text-bull' : 'text-bear'}`}>
+                {lastSqz.momentum > 0 ? '+' : ''}{lastSqz.momentum.toFixed(4)}
+              </div>
+              <div className="text-xs text-gray-500 mt-0.5">Momentum</div>
+            </div>
+            <div className="text-center">
+              <div className={`text-lg font-bold ${lastSqz.rising ? 'text-bull' : 'text-bear'}`}>
+                {lastSqz.rising ? '▲ Rising' : '▼ Falling'}
+              </div>
+              <div className="text-xs text-gray-500 mt-0.5">Direction</div>
+            </div>
+          </div>
+          <p className="text-xs text-gray-500 leading-relaxed">
+            {lastSqz.sqzOn
+              ? 'Bollinger Bands are inside Keltner Channels — volatility is compressed. An explosive directional move is likely building. Wait for the squeeze to release before entering.'
+              : lastSqz.sqzOff
+                ? `Squeeze just released! Momentum is ${lastSqz.momentum > 0 ? 'positive and' : 'negative and'} ${lastSqz.rising ? 'rising' : 'falling'} — this is the highest-probability entry window.`
+                : `No active squeeze. Momentum is ${lastSqz.momentum > 0 ? 'positive' : 'negative'} and ${lastSqz.rising ? 'accelerating' : 'decelerating'}.`}
+          </p>
+        </div>
+      )}
+
+      {/* ── Ichimoku Cloud ────────────────────────────────────────────────── */}
+      {lastIchi && !isNaN(lastIchi.tenkan) && !isNaN(lastIchi.kijun) && (
+        <div className="card space-y-3">
+          <h3 className="text-sm font-semibold text-gray-300">Ichimoku Cloud</h3>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            {[
+              { label: 'Tenkan-sen (9)', val: lastIchi.tenkan, color: 'text-blue-300' },
+              { label: 'Kijun-sen (26)', val: lastIchi.kijun,  color: 'text-orange-300' },
+              { label: 'Senkou A',       val: lastIchi.senkouA, color: 'text-green-300' },
+              { label: 'Senkou B',       val: lastIchi.senkouB, color: 'text-red-300' },
+            ].map(({ label, val, color }) => (
+              <div key={label} className="p-2 bg-surface-muted rounded-lg text-center">
+                <div className="text-gray-500 mb-1">{label}</div>
+                <div className={`font-mono font-bold ${color}`}>
+                  {isNaN(val) ? 'N/A' : `$${fmtPrice(val)}`}
+                </div>
+                {!isNaN(val) && (
+                  <div className={`text-xs mt-0.5 ${val > price ? 'text-bear' : 'text-bull'}`}>
+                    {((val - price) / price * 100).toFixed(2)}%
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {(() => {
+            const aboveCloud = !isNaN(lastIchi.senkouA) && !isNaN(lastIchi.senkouB) &&
+              price > Math.max(lastIchi.senkouA, lastIchi.senkouB)
+            const belowCloud = !isNaN(lastIchi.senkouA) && !isNaN(lastIchi.senkouB) &&
+              price < Math.min(lastIchi.senkouA, lastIchi.senkouB)
+            const tkBullish = !isNaN(lastIchi.tenkan) && !isNaN(lastIchi.kijun) && lastIchi.tenkan > lastIchi.kijun
+            const tkCross = prevIchi && !isNaN(prevIchi.tenkan) && !isNaN(prevIchi.kijun) &&
+              ((lastIchi.tenkan > lastIchi.kijun) !== (prevIchi.tenkan > prevIchi.kijun))
+            const cloudBull = !isNaN(lastIchi.senkouA) && !isNaN(lastIchi.senkouB) &&
+              lastIchi.senkouA > lastIchi.senkouB
+
+            return (
+              <div className="space-y-2 text-xs">
+                <div className="flex flex-wrap gap-2">
+                  <span className={`px-2 py-0.5 rounded border text-xs font-medium ${
+                    aboveCloud ? 'bg-green-500/10 text-bull border-green-500/30'
+                    : belowCloud ? 'bg-red-500/10 text-bear border-red-500/30'
+                    : 'bg-amber-500/10 text-warn border-amber-500/30'
+                  }`}>
+                    {aboveCloud ? 'Above Cloud (bullish)' : belowCloud ? 'Below Cloud (bearish)' : 'Inside Cloud (neutral)'}
+                  </span>
+                  <span className={`px-2 py-0.5 rounded border text-xs font-medium ${
+                    tkBullish ? 'bg-green-500/10 text-bull border-green-500/30' : 'bg-red-500/10 text-bear border-red-500/30'
+                  }`}>
+                    TK {tkBullish ? 'Bullish' : 'Bearish'}
+                    {tkCross && <span className="ml-1 font-bold">(CROSS!)</span>}
+                  </span>
+                  <span className={`px-2 py-0.5 rounded border text-xs font-medium ${
+                    cloudBull ? 'bg-green-500/10 text-bull border-green-500/30' : 'bg-red-500/10 text-bear border-red-500/30'
+                  }`}>
+                    {cloudBull ? 'Green Cloud' : 'Red Cloud'}
+                  </span>
+                </div>
+                <p className="text-gray-500 leading-relaxed">
+                  {aboveCloud && tkBullish
+                    ? 'Price above the cloud with Tenkan above Kijun — strong bullish Ichimoku structure. The cloud acts as layered support below.'
+                    : belowCloud && !tkBullish
+                      ? 'Price below the cloud with Tenkan below Kijun — strong bearish Ichimoku structure. The cloud acts as layered resistance above.'
+                      : aboveCloud
+                        ? 'Price above the cloud but TK cross is mixed — moderate bullish. Watch for Tenkan to cross above Kijun for confirmation.'
+                        : belowCloud
+                          ? 'Price below the cloud — bearish. Even short-term rallies may stall at the cloud.'
+                          : 'Price inside the cloud — indecision zone. Breakout above cloud = bullish; breakdown below = bearish.'}
+                </p>
+              </div>
+            )
+          })()}
+        </div>
+      )}
+
+      {/* ── Wyckoff Phase ─────────────────────────────────────────────────── */}
+      {wyckoff.phase !== 'Undetermined' && (
+        <div className={`card border space-y-2 ${
+          wyckoff.phase === 'Accumulation' || wyckoff.phase === 'Markup'
+            ? 'border-green-500/30 bg-green-500/5'
+            : 'border-red-500/30 bg-red-500/5'
+        }`}>
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-0.5">Wyckoff Phase</div>
+              <div className={`text-base font-bold ${
+                wyckoff.phase === 'Accumulation' || wyckoff.phase === 'Markup' ? 'text-bull' : 'text-bear'
+              }`}>
+                {wyckoff.phase}
+              </div>
+            </div>
+            <span className={`text-xs font-medium px-2 py-1 rounded border ${
+              wyckoff.confidence === 'High'
+                ? 'bg-blue-500/10 text-blue-300 border-blue-500/30'
+                : wyckoff.confidence === 'Medium'
+                  ? 'bg-amber-500/10 text-warn border-amber-500/30'
+                  : 'bg-gray-500/10 text-gray-400 border-gray-500/20'
+            }`}>
+              {wyckoff.confidence} Confidence
+            </span>
+          </div>
+          <p className="text-xs text-gray-300 leading-relaxed">{wyckoff.description}</p>
         </div>
       )}
 
