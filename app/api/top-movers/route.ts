@@ -3,70 +3,104 @@ import { NextResponse } from 'next/server'
 const STABLECOINS = new Set([
   'USDC', 'BUSD', 'TUSD', 'USDP', 'DAI', 'FDUSD', 'USDT',
   'EURS', 'EURT', 'AEUR', 'PYUSD', 'SUSD', 'LUSD', 'FRAX',
+  'USD1', 'RLUSD', 'USDE', 'USDX',
 ])
 
 export interface MoverCoin {
-  symbol: string     // e.g. "BTC"
-  pair: string       // e.g. "BTCUSDT"
+  symbol: string
+  pair: string
   price: number
-  change24h: number  // percent
-  volume: number     // in USDT
+  change24h: number
+  volume: number
 }
 
 export interface HeatmapCoin extends MoverCoin {
-  /** Rough market cap tier for sizing tiles: 1=large, 2=mid, 3=small */
   tier: 1 | 2 | 3
 }
 
-export async function GET() {
-  try {
-    const res = await fetch('https://api.binance.com/api/v3/ticker/24hr', {
-      next: { revalidate: 30 },
-    })
-    if (!res.ok) throw new Error(`Binance ticker error: ${res.status}`)
+// ─── Binance source ───────────────────────────────────────────────────────────
 
-    const raw: {
-      symbol: string
-      lastPrice: string
-      priceChangePercent: string
-      quoteVolume: string
-    }[] = await res.json()
+async function fromBinance(): Promise<MoverCoin[]> {
+  const res = await fetch('https://api.binance.com/api/v3/ticker/24hr', {
+    cache: 'no-store',
+  })
+  if (!res.ok) throw new Error(`Binance ${res.status}`)
 
-    // Filter: USDT pairs only, exclude stablecoins, minimum $10M volume
-    const filtered = raw.filter((t) => {
+  const raw: {
+    symbol: string
+    lastPrice: string
+    priceChangePercent: string
+    quoteVolume: string
+  }[] = await res.json()
+
+  return raw
+    .filter((t) => {
       if (!t.symbol.endsWith('USDT')) return false
-      const base = t.symbol.replace('USDT', '')
+      const base = t.symbol.slice(0, -4)
       if (STABLECOINS.has(base)) return false
       if (parseFloat(t.quoteVolume) < 10_000_000) return false
       return true
     })
-
-    const mapped: MoverCoin[] = filtered.map((t) => ({
-      symbol: t.symbol.replace('USDT', ''),
+    .map((t) => ({
+      symbol: t.symbol.slice(0, -4),
       pair: t.symbol,
       price: parseFloat(t.lastPrice),
       change24h: parseFloat(t.priceChangePercent),
       volume: parseFloat(t.quoteVolume),
     }))
+}
 
-    // Sort by absolute change for gainers/losers
-    const sorted = [...mapped].sort((a, b) => b.change24h - a.change24h)
+// ─── CoinPaprika fallback ─────────────────────────────────────────────────────
 
+interface CPTicker {
+  symbol: string
+  rank: number
+  quotes: { USD: { price: number; percent_change_24h: number; volume_24h: number } }
+}
+
+async function fromCoinPaprika(): Promise<MoverCoin[]> {
+  const res = await fetch('https://api.coinpaprika.com/v1/tickers?quotes=USD', {
+    cache: 'no-store',
+  })
+  if (!res.ok) throw new Error(`CoinPaprika ${res.status}`)
+  const raw: CPTicker[] = await res.json()
+
+  return raw
+    .filter((t) => {
+      if (STABLECOINS.has(t.symbol)) return false
+      const vol = t.quotes?.USD?.volume_24h ?? 0
+      if (vol < 10_000_000) return false
+      return true
+    })
+    .map((t) => ({
+      symbol: t.symbol,
+      pair: `${t.symbol}USDT`,
+      price: t.quotes.USD.price,
+      change24h: t.quotes.USD.percent_change_24h,
+      volume: t.quotes.USD.volume_24h,
+    }))
+}
+
+// ─── Route handler ────────────────────────────────────────────────────────────
+
+export async function GET() {
+  try {
+    let coins: MoverCoin[]
+
+    try {
+      coins = await fromBinance()
+    } catch {
+      coins = await fromCoinPaprika()
+    }
+
+    const sorted = [...coins].sort((a, b) => b.change24h - a.change24h)
     const gainers = sorted.slice(0, 6)
     const losers = sorted.slice(-6).reverse()
+    const byVolume = [...coins].sort((a, b) => b.volume - a.volume).slice(0, 10)
 
-    // Top by volume
-    const byVolume = [...mapped]
-      .sort((a, b) => b.volume - a.volume)
-      .slice(0, 10)
-
-    // Heatmap: top 40 by volume with tier sizing
-    const heatmapRaw = [...mapped]
-      .sort((a, b) => b.volume - a.volume)
-      .slice(0, 40)
-
+    const heatmapRaw = [...coins].sort((a, b) => b.volume - a.volume).slice(0, 40)
     const maxVol = heatmapRaw[0]?.volume ?? 1
-    const heatmap: HeatmapCoin[] = heatmapRaw.map(c => ({
+    const heatmap: HeatmapCoin[] = heatmapRaw.map((c) => ({
       ...c,
       tier: c.volume > maxVol * 0.3 ? 1 : c.volume > maxVol * 0.05 ? 2 : 3,
     }))

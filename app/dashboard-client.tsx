@@ -283,7 +283,7 @@ function BtcChartSection({ stream }: { stream: ReturnType<typeof useStreamPrices
 // ─── Top Movers ───────────────────────────────────────────────────────────────
 
 function TopMovers() {
-  const { data, isLoading } = useTopMovers()
+  const { data, isLoading, isError } = useTopMovers()
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -300,6 +300,8 @@ function TopMovers() {
               <div key={i} className="skeleton h-9 rounded" />
             ))}
           </div>
+        ) : isError ? (
+          <p className="text-xs text-gray-500 py-4 text-center">Failed to load data</p>
         ) : (
           <div className="space-y-1">
             {(data?.gainers ?? []).map((coin) => (
@@ -343,6 +345,8 @@ function TopMovers() {
               <div key={i} className="skeleton h-9 rounded" />
             ))}
           </div>
+        ) : isError ? (
+          <p className="text-xs text-gray-500 py-4 text-center">Failed to load data</p>
         ) : (
           <div className="space-y-1">
             {(data?.losers ?? []).map((coin) => (
@@ -379,7 +383,7 @@ function TopMovers() {
 // ─── Volume Leaders ───────────────────────────────────────────────────────────
 
 function VolumeLeaders() {
-  const { data, isLoading } = useTopMovers()
+  const { data, isLoading, isError } = useTopMovers()
   const coins = data?.byVolume ?? []
 
   return (
@@ -395,6 +399,8 @@ function VolumeLeaders() {
             <div key={i} className="skeleton h-8 w-24 rounded-lg" />
           ))}
         </div>
+      ) : isError ? (
+        <p className="text-xs text-gray-500 py-4 text-center">Failed to load data</p>
       ) : (
         <div className="flex flex-wrap gap-2">
           {coins.map((coin, idx) => (
