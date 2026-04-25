@@ -42,22 +42,43 @@ function rsiColor(rsi: number): string {
   return 'text-gray-300'
 }
 
+type Interval = '1h' | '4h' | '1d'
+
+const INTERVAL_LABELS: Record<Interval, string> = {
+  '1h':  '1 Hour',
+  '4h':  '4 Hour',
+  '1d':  'Daily',
+}
+
+const INTERVAL_STALE: Record<Interval, number> = {
+  '1h':  5 * 60_000,
+  '4h':  15 * 60_000,
+  '1d':  60 * 60_000,
+}
+
 export default function ScreenerClient() {
+  const [interval, setInterval] = useState<Interval>('1h')
   const [minSignal, setMinSignal] = useState(-10)
   const [maxSignal, setMaxSignal] = useState(10)
   const [pattern, setPattern] = useState<'all' | 'bullish' | 'bearish'>('all')
   const [sortBy, setSortBy] = useState<'signal' | 'change24h' | 'volume24h' | 'rsi'>('signal')
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc')
 
-  const { data, isLoading, isError, refetch, dataUpdatedAt } = useQuery<{ coins: ScreenerCoin[]; updatedAt: string }>({
-    queryKey: ['screener'],
+  const stale = INTERVAL_STALE[interval]
+
+  const { data, isLoading, isError, error, refetch, dataUpdatedAt } = useQuery<{ coins: ScreenerCoin[]; updatedAt: string; failedCount?: number; interval: string }>({
+    queryKey: ['screener', interval],
     queryFn: async () => {
-      const res = await fetch('/api/screener')
-      if (!res.ok) throw new Error('Screener fetch failed')
+      const res = await fetch(`/api/screener?interval=${interval}`)
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error((body as { error?: string }).error ?? 'Screener fetch failed')
+      }
       return res.json()
     },
-    staleTime: 300_000,
-    refetchInterval: 300_000,
+    staleTime: stale,
+    refetchInterval: stale,
+    retry: 3,
   })
 
   const filtered = (data?.coins ?? [])
@@ -80,15 +101,31 @@ export default function ScreenerClient() {
   }
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      <div className="flex items-start justify-between flex-wrap gap-3">
+    <div className="space-y-6">
+      <div className="flex items-start justify-between flex-wrap gap-3 animate-slide-in-left">
         <div>
           <h1 className="text-2xl font-bold text-gray-100">Signal Screener</h1>
           <p className="text-sm text-gray-500 mt-1">
-            Top 25 coins by volume — live signal scores from 1h klines
+            Top coins by volume — signal scores from {INTERVAL_LABELS[interval]} klines
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {/* Timeframe toggle */}
+          <div className="flex rounded-lg overflow-hidden border border-surface-border">
+            {(['1h', '4h', '1d'] as Interval[]).map((iv) => (
+              <button
+                key={iv}
+                onClick={() => setInterval(iv)}
+                className={`px-3 py-1.5 text-xs font-mono font-medium transition-colors ${
+                  interval === iv
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-surface-muted text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                {iv}
+              </button>
+            ))}
+          </div>
           {dataUpdatedAt > 0 && (
             <span className="text-xs text-gray-600">
               Updated {new Date(dataUpdatedAt).toLocaleTimeString()}
@@ -99,7 +136,7 @@ export default function ScreenerClient() {
       </div>
 
       {/* Filters */}
-      <div className="card space-y-4">
+      <div className="card space-y-4 animate-slide-in-up delay-100">
         <h2 className="text-sm font-semibold text-gray-300">Filters</h2>
         <div className="flex flex-wrap gap-6 items-end">
           <div>
@@ -168,10 +205,20 @@ export default function ScreenerClient() {
         </div>
       </div>
 
+      {/* Partial-results banner */}
+      {data?.failedCount !== undefined && data.failedCount > 0 && (
+        <div className="card bg-amber-500/5 border border-amber-500/20 text-xs text-amber-400 px-4 py-2 animate-slide-in-up">
+          {data.failedCount} coin{data.failedCount !== 1 ? 's' : ''} could not be fetched from Binance and are excluded from results.
+        </div>
+      )}
+
       {/* Table */}
       {isError ? (
         <div className="card text-center py-12">
-          <p className="text-gray-400 mb-4">Failed to load screener data.</p>
+          <p className="text-gray-400 mb-2">Failed to load screener data.</p>
+          {error instanceof Error && (
+            <p className="text-xs text-gray-600 mb-4">{error.message}</p>
+          )}
           <button onClick={() => refetch()} className="btn-primary">Retry</button>
         </div>
       ) : isLoading ? (
@@ -181,7 +228,7 @@ export default function ScreenerClient() {
           ))}
         </div>
       ) : (
-        <div className="card overflow-x-auto">
+        <div className="card overflow-x-auto animate-slide-in-up delay-200">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-xs text-gray-500 border-b border-surface-border">
@@ -204,8 +251,12 @@ export default function ScreenerClient() {
               </tr>
             </thead>
             <tbody className="divide-y divide-surface-border/50">
-              {filtered.map((coin) => (
-                <tr key={coin.symbol} className="hover:bg-surface-muted/40 transition-colors">
+              {filtered.map((coin, i) => (
+                <tr
+                  key={coin.symbol}
+                  className="hover:bg-surface-muted/40 transition-colors animate-slide-in-left"
+                  style={{ animationDelay: `${i * 45}ms` }}
+                >
                   <td className="py-3 pr-4">
                     <span className="font-mono font-bold text-gray-100">{coin.symbol}</span>
                   </td>
@@ -258,7 +309,7 @@ export default function ScreenerClient() {
       )}
 
       <p className="text-xs text-gray-600 text-center">
-        Signals computed from 1h Binance klines. Refreshes every 5 minutes. Not financial advice.
+        Signals computed from {interval} Binance klines · Refreshes every {interval === '1h' ? '5 min' : interval === '4h' ? '15 min' : '1 hour'} · Not financial advice
       </p>
     </div>
   )

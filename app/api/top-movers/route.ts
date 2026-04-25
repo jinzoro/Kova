@@ -1,10 +1,20 @@
 import { NextResponse } from 'next/server'
 
+export const runtime = 'nodejs'
+export const revalidate = 30   // ISR cache: re-use response for 30s, no hammering Binance
+
 const STABLECOINS = new Set([
   'USDC', 'BUSD', 'TUSD', 'USDP', 'DAI', 'FDUSD', 'USDT',
   'EURS', 'EURT', 'AEUR', 'PYUSD', 'SUSD', 'LUSD', 'FRAX',
   'USD1', 'RLUSD', 'USDE', 'USDX',
 ])
+
+function isClean(base: string) {
+  if (STABLECOINS.has(base)) return false
+  if (!/^[A-Z0-9]+$/.test(base)) return false
+  if (base.includes('UP') || base.includes('DOWN')) return false
+  return true
+}
 
 export interface MoverCoin {
   symbol: string
@@ -18,18 +28,19 @@ export interface HeatmapCoin extends MoverCoin {
   tier: 1 | 2 | 3
 }
 
-// ─── Binance source ───────────────────────────────────────────────────────────
+// ─── Binance MINI ticker — same data, ≈600 KB instead of 2.4 MB ──────────────
+// type=MINI: { symbol, openPrice, highPrice, lowPrice, lastPrice, volume, quoteVolume }
 
 async function fromBinance(): Promise<MoverCoin[]> {
-  const res = await fetch('https://api.binance.com/api/v3/ticker/24hr', {
-    cache: 'no-store',
+  const res = await fetch('https://api.binance.com/api/v3/ticker/24hr?type=MINI', {
+    next: { revalidate: 30 },   // let Next.js ISR cache the response for 30s
   })
   if (!res.ok) throw new Error(`Binance ${res.status}`)
 
   const raw: {
     symbol: string
     lastPrice: string
-    priceChangePercent: string
+    openPrice: string
     quoteVolume: string
   }[] = await res.json()
 
@@ -37,15 +48,16 @@ async function fromBinance(): Promise<MoverCoin[]> {
     .filter((t) => {
       if (!t.symbol.endsWith('USDT')) return false
       const base = t.symbol.slice(0, -4)
-      if (STABLECOINS.has(base)) return false
-      if (parseFloat(t.quoteVolume) < 10_000_000) return false
+      if (!isClean(base)) return false
+      if (parseFloat(t.quoteVolume) < 5_000_000) return false
       return true
     })
     .map((t) => ({
       symbol: t.symbol.slice(0, -4),
       pair: t.symbol,
       price: parseFloat(t.lastPrice),
-      change24h: parseFloat(t.priceChangePercent),
+      // MINI ticker doesn't have priceChangePercent — compute from openPrice
+      change24h: ((parseFloat(t.lastPrice) - parseFloat(t.openPrice)) / parseFloat(t.openPrice)) * 100,
       volume: parseFloat(t.quoteVolume),
     }))
 }
@@ -60,16 +72,16 @@ interface CPTicker {
 
 async function fromCoinPaprika(): Promise<MoverCoin[]> {
   const res = await fetch('https://api.coinpaprika.com/v1/tickers?quotes=USD', {
-    cache: 'no-store',
+    next: { revalidate: 60 },
   })
   if (!res.ok) throw new Error(`CoinPaprika ${res.status}`)
   const raw: CPTicker[] = await res.json()
 
   return raw
     .filter((t) => {
-      if (STABLECOINS.has(t.symbol)) return false
+      if (!isClean(t.symbol)) return false
       const vol = t.quotes?.USD?.volume_24h ?? 0
-      if (vol < 10_000_000) return false
+      if (vol < 5_000_000) return false
       return true
     })
     .map((t) => ({
@@ -89,13 +101,16 @@ export async function GET() {
 
     try {
       coins = await fromBinance()
-    } catch {
+    } catch (e) {
+      console.warn('[top-movers] Binance failed, falling back to CoinPaprika:', e)
       coins = await fromCoinPaprika()
     }
 
+    if (coins.length === 0) throw new Error('Both sources returned empty')
+
     const sorted = [...coins].sort((a, b) => b.change24h - a.change24h)
     const gainers = sorted.slice(0, 6)
-    const losers = sorted.slice(-6).reverse()
+    const losers  = sorted.slice(-6).reverse()
     const byVolume = [...coins].sort((a, b) => b.volume - a.volume).slice(0, 10)
 
     const heatmapRaw = [...coins].sort((a, b) => b.volume - a.volume).slice(0, 40)
@@ -107,7 +122,10 @@ export async function GET() {
 
     return NextResponse.json({ gainers, losers, byVolume, heatmap })
   } catch (err) {
-    console.error('top-movers route error:', err)
-    return NextResponse.json({ gainers: [], losers: [], byVolume: [], heatmap: [] }, { status: 500 })
+    console.error('[top-movers] fatal:', err)
+    return NextResponse.json(
+      { error: 'Market data unavailable', gainers: [], losers: [], byVolume: [], heatmap: [] },
+      { status: 500 },
+    )
   }
 }

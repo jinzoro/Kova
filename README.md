@@ -147,8 +147,40 @@ All API routes use Next.js Edge/Node runtimes and deploy automatically. No separ
 |---|---|
 | `/` | Market overview dashboard — live BTC chart, gainers/losers, watchlist |
 | `/coin/[symbol]` | Full technical analysis for any coin (e.g. `/coin/btc`, `/coin/eth`, `/coin/sol`) |
+| `/screener` | Signal screener — filterable table of the top coins by Binance volume with signal scores, RSI, and pattern detection |
 | `/alerts` | Create and manage price alerts with browser notifications |
 | `/news` | Aggregated crypto news filtered by BTC, ETH, DeFi categories |
+
+---
+
+## Signal Screener
+
+Located at `/screener`. A real-time table of the top coins by 24h USDT volume on Binance, scored with the same signal engine used on coin detail pages.
+
+### Columns
+
+| Column | Description |
+|---|---|
+| **Coin** | Base symbol (e.g. BTC, ETH, SOL) |
+| **Price** | Last trade price in USD |
+| **24h** | 24-hour price change % |
+| **Volume** | 24h USDT trading volume |
+| **RSI** | Current RSI(14) from 1h klines — colored green (<30), red (>70) |
+| **Signal** | Composite score −10 to +10 from the scoring engine |
+| **Pattern** | Most recent candlestick pattern detected in the last 5 candles |
+
+### Filters
+
+- **Signal score range** — slider from −10 to +10; quick presets: Strong Buy (≥+6), Buy Zone (≥+2), Oversold (≤−4)
+- **Pattern type** — All / Bullish / Bearish
+- **Sort** — click any column header to sort ascending or descending
+
+### Data & Refresh
+
+- Scores computed server-side from 1h Binance klines (200 candles per coin)
+- Stablecoins (USDC, DAI, RLUSD, etc.) and leveraged tokens are excluded automatically
+- Route cached for 5 minutes (`revalidate = 300`); client polls every 5 minutes
+- A partial-results banner appears if some coins failed to fetch (e.g. Binance rate limiting on cloud IPs)
 
 ---
 
@@ -632,9 +664,11 @@ kova/
 │   ├── providers.tsx               # React Query + toast providers
 │   ├── globals.css                 # Global styles, design tokens
 │   ├── coin/[symbol]/              # Coin detail pages
+│   ├── screener/                   # Signal screener (filterable table)
 │   ├── alerts/                     # Price alerts
 │   ├── news/                       # News feed
 │   └── api/
+│       ├── screener/route.ts       # Top coins screener with kline-based signals
 │       ├── top-movers/route.ts     # Top gainers/losers from Binance
 │       ├── cmc/quote/route.ts      # CoinMarketCap proxy
 │       └── news/route.ts           # CryptoCompare news proxy

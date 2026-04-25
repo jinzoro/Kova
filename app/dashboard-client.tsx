@@ -9,10 +9,12 @@ import FearGreedGauge from '@/components/ui/FearGreedGauge'
 import BtcMiniChart from '@/components/charts/BtcMiniChart'
 import MarketHeatmap from '@/components/ui/MarketHeatmap'
 import CorrelationMatrix from '@/components/ui/CorrelationMatrix'
+import FundingRatesPanel from '@/components/ui/FundingRatesPanel'
+import DominanceChart from '@/components/charts/DominanceChart'
 import CoinLogo from '@/components/ui/CoinLogo'
 import { useSparklines } from '@/hooks/useSparklines'
 import Link from 'next/link'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 
 // Symbols streamed via WebSocket on the dashboard
 const STREAM_SYMBOLS = ['BTC', 'ETH', 'SOL', 'BNB', 'ADA']
@@ -31,6 +33,64 @@ function fmtPrice(n: number): string {
   if (n >= 1000) return `$${n.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
   if (n >= 1) return `$${n.toFixed(4)}`
   return `$${n.toFixed(6)}`
+}
+
+// ─── CountUp ─────────────────────────────────────────────────────────────────
+// Animates a number from 0 → target over `duration` ms using rAF
+
+function CountUp({ to, format, duration = 900 }: { to: number; format: (n: number) => string; duration?: number }) {
+  const [display, setDisplay] = useState(format(0))
+  const startRef = useRef<number | null>(null)
+  const rafRef   = useRef<number | null>(null)
+
+  useEffect(() => {
+    startRef.current = null
+    const step = (ts: number) => {
+      if (startRef.current === null) startRef.current = ts
+      const elapsed = ts - startRef.current
+      const progress = Math.min(elapsed / duration, 1)
+      // ease-out cubic
+      const eased = 1 - Math.pow(1 - progress, 3)
+      setDisplay(format(to * eased))
+      if (progress < 1) rafRef.current = requestAnimationFrame(step)
+    }
+    rafRef.current = requestAnimationFrame(step)
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }
+  }, [to, format, duration])
+
+  return <span className="animate-number-in">{display}</span>
+}
+
+// ─── TiltCard ────────────────────────────────────────────────────────────────
+// 3-D parallax tilt on mouse hover
+
+function TiltCard({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+
+  const onMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const el = ref.current
+    if (!el) return
+    const { left, top, width, height } = el.getBoundingClientRect()
+    const x = (e.clientX - left) / width  - 0.5   // -0.5 … 0.5
+    const y = (e.clientY - top)  / height - 0.5
+    el.style.transform = `perspective(700px) rotateX(${(-y * 6).toFixed(2)}deg) rotateY(${(x * 6).toFixed(2)}deg) translateZ(4px)`
+  }, [])
+
+  const onLeave = useCallback(() => {
+    if (ref.current) ref.current.style.transform = 'perspective(700px) rotateX(0) rotateY(0) translateZ(0)'
+  }, [])
+
+  return (
+    <div
+      ref={ref}
+      className={className}
+      style={{ transformStyle: 'preserve-3d', transition: 'transform 0.35s cubic-bezier(0.03,0.98,0.52,0.99)' }}
+      onMouseMove={onMove}
+      onMouseLeave={onLeave}
+    >
+      {children}
+    </div>
+  )
 }
 
 // ─── Live Clock ───────────────────────────────────────────────────────────────
@@ -66,13 +126,13 @@ function MarketSummaryStrip() {
   const fgValue = fg?.data?.[0] ? parseInt(fg.data[0].value) : null
   const fgClass = fg?.data?.[0]?.value_classification ?? ''
   const totalMcap = global?.data?.total_market_cap?.usd
-  const totalVol = global?.data?.total_volume?.usd
-  const btcDom = global?.data?.market_cap_percentage?.btc
-  const ethDom = global?.data?.market_cap_percentage?.eth
-  const mcapChange = global?.data?.market_cap_change_percentage_24h_usd
+  const totalVol  = global?.data?.total_volume?.usd
+  const btcDom    = global?.data?.market_cap_percentage?.btc
+  const ethDom    = global?.data?.market_cap_percentage?.eth
+  const mcapChange= global?.data?.market_cap_change_percentage_24h_usd
 
   return (
-    <div className="card flex flex-wrap items-center gap-6 overflow-x-auto">
+    <div className="card-live flex flex-wrap items-center gap-6 overflow-x-auto">
       {fgLoading ? (
         <div className="skeleton h-16 w-28 rounded" />
       ) : fgValue !== null ? (
@@ -90,9 +150,11 @@ function MarketSummaryStrip() {
       ) : (
         <div className="flex flex-wrap items-center gap-6 text-sm">
           {totalMcap && (
-            <div>
+            <div className="animate-slide-in-up delay-100">
               <div className="text-gray-500 text-xs mb-0.5">Total Market Cap</div>
-              <div className="font-mono font-semibold text-gray-100">{fmt(totalMcap)}</div>
+              <div className="font-mono font-semibold text-gray-100">
+                <CountUp to={totalMcap} format={fmt} />
+              </div>
               {mcapChange != null && (
                 <div className={`text-xs font-mono mt-0.5 ${mcapChange >= 0 ? 'text-bull' : 'text-bear'}`}>
                   {mcapChange >= 0 ? '▲' : '▼'} {Math.abs(mcapChange).toFixed(2)}% 24h
@@ -101,33 +163,30 @@ function MarketSummaryStrip() {
             </div>
           )}
           {totalVol && (
-            <div>
+            <div className="animate-slide-in-up delay-150">
               <div className="text-gray-500 text-xs mb-0.5">24h Volume</div>
-              <div className="font-mono font-semibold text-gray-100">{fmt(totalVol)}</div>
+              <div className="font-mono font-semibold text-gray-100">
+                <CountUp to={totalVol} format={fmt} />
+              </div>
             </div>
           )}
           {btcDom != null && (
-            <div>
+            <div className="animate-slide-in-up delay-200">
               <div className="text-gray-500 text-xs mb-0.5">BTC Dom</div>
               <div className="font-mono font-semibold text-gray-100">{btcDom.toFixed(1)}%</div>
-              {/* Mini dominance bar */}
               <div className="mt-1 h-1 w-20 bg-surface-muted rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-orange-400 rounded-full"
-                  style={{ width: `${btcDom}%` }}
-                />
+                <div className="h-full bg-orange-400 rounded-full transition-all duration-1000"
+                  style={{ width: `${btcDom}%` }} />
               </div>
             </div>
           )}
           {ethDom != null && (
-            <div>
+            <div className="animate-slide-in-up delay-250">
               <div className="text-gray-500 text-xs mb-0.5">ETH Dom</div>
               <div className="font-mono font-semibold text-gray-100">{ethDom.toFixed(1)}%</div>
               <div className="mt-1 h-1 w-20 bg-surface-muted rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-blue-400 rounded-full"
-                  style={{ width: `${ethDom * 4}%` }}
-                />
+                <div className="h-full bg-blue-400 rounded-full transition-all duration-1000"
+                  style={{ width: `${ethDom * 4}%` }} />
               </div>
             </div>
           )}
@@ -187,23 +246,25 @@ function BtcChartSection({ stream }: { stream: ReturnType<typeof useStreamPrices
   const wsConnected = !!btcStream
 
   return (
-    <div className="card">
+    <div className="card-live">
       {/* Header */}
       <div className="flex items-start justify-between mb-4">
         <div className="flex items-center gap-3">
-          <CoinLogo
-            src="https://static.coinpaprika.com/coin/btc-bitcoin/logo.png"
-            alt="BTC"
-            size={36}
-          />
+          <div className="animate-float">
+            <CoinLogo
+              src="https://static.coinpaprika.com/coin/btc-bitcoin/logo.png"
+              alt="BTC"
+              size={36}
+            />
+          </div>
           <div>
             <div className="flex items-center gap-2">
               <span className="font-bold text-gray-100 text-lg">Bitcoin</span>
               <span className="text-xs text-gray-500 font-mono">BTC/USDT</span>
-              {/* WebSocket status dot */}
+              {/* WebSocket status dot with pulse ring */}
               <span
                 title={wsConnected ? 'Live WebSocket feed' : 'Connecting...'}
-                className={`inline-block w-1.5 h-1.5 rounded-full ${wsConnected ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`}
+                className={`inline-block w-2 h-2 rounded-full relative ${wsConnected ? 'bg-green-400 text-green-400 pulse-ring' : 'bg-gray-600'}`}
               />
             </div>
             <div className="flex items-center gap-2 mt-0.5">
@@ -288,9 +349,10 @@ function TopMovers() {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
       {/* Gainers */}
-      <div className="card">
+      <TiltCard>
+      <div className="card h-full">
         <div className="flex items-center gap-2 mb-4">
-          <div className="w-2 h-2 rounded-full bg-bull animate-pulse" />
+          <div className="w-2 h-2 rounded-full bg-bull text-bull pulse-ring" />
           <h3 className="text-sm font-semibold text-gray-300">Top Gainers</h3>
           <span className="ml-auto text-xs text-gray-600">24h</span>
         </div>
@@ -304,11 +366,12 @@ function TopMovers() {
           <p className="text-xs text-gray-500 py-4 text-center">Failed to load data</p>
         ) : (
           <div className="space-y-1">
-            {(data?.gainers ?? []).map((coin) => (
+            {(data?.gainers ?? []).map((coin, i) => (
               <Link
                 key={coin.symbol}
                 href={`/coin/${coin.symbol.toLowerCase()}`}
-                className="flex items-center justify-between px-3 py-2 rounded-lg hover:bg-green-500/5 transition-colors group"
+                className="flex items-center justify-between px-3 py-2 rounded-lg hover:bg-green-500/5 transition-colors group animate-slide-in-left"
+                style={{ animationDelay: `${i * 60}ms` }}
               >
                 <div className="flex items-center gap-3">
                   <span className="font-mono font-semibold text-xs text-gray-300 w-14 group-hover:text-green-300 transition-colors">
@@ -331,11 +394,13 @@ function TopMovers() {
           </div>
         )}
       </div>
+      </TiltCard>
 
       {/* Losers */}
-      <div className="card">
+      <TiltCard>
+      <div className="card h-full">
         <div className="flex items-center gap-2 mb-4">
-          <div className="w-2 h-2 rounded-full bg-bear animate-pulse" />
+          <div className="w-2 h-2 rounded-full bg-bear text-bear pulse-ring" />
           <h3 className="text-sm font-semibold text-gray-300">Top Losers</h3>
           <span className="ml-auto text-xs text-gray-600">24h</span>
         </div>
@@ -349,11 +414,12 @@ function TopMovers() {
           <p className="text-xs text-gray-500 py-4 text-center">Failed to load data</p>
         ) : (
           <div className="space-y-1">
-            {(data?.losers ?? []).map((coin) => (
+            {(data?.losers ?? []).map((coin, i) => (
               <Link
                 key={coin.symbol}
                 href={`/coin/${coin.symbol.toLowerCase()}`}
-                className="flex items-center justify-between px-3 py-2 rounded-lg hover:bg-red-500/5 transition-colors group"
+                className="flex items-center justify-between px-3 py-2 rounded-lg hover:bg-red-500/5 transition-colors group animate-slide-in-left"
+                style={{ animationDelay: `${i * 60}ms` }}
               >
                 <div className="flex items-center gap-3">
                   <span className="font-mono font-semibold text-xs text-gray-300 w-14 group-hover:text-red-300 transition-colors">
@@ -376,6 +442,7 @@ function TopMovers() {
           </div>
         )}
       </div>
+      </TiltCard>
     </div>
   )
 }
@@ -402,24 +469,27 @@ function VolumeLeaders() {
       ) : isError ? (
         <p className="text-xs text-gray-500 py-4 text-center">Failed to load data</p>
       ) : (
-        <div className="flex flex-wrap gap-2">
-          {coins.map((coin, idx) => (
-            <Link
-              key={coin.symbol}
-              href={`/coin/${coin.symbol.toLowerCase()}`}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all hover:scale-[1.02] ${
-                coin.change24h >= 0
-                  ? 'border-green-500/20 hover:border-green-500/40 hover:bg-green-500/5'
-                  : 'border-red-500/20 hover:border-red-500/40 hover:bg-red-500/5'
-              } bg-surface-muted`}
-            >
-              <span className="text-gray-600 text-xs font-mono">#{idx + 1}</span>
-              <span className="font-mono text-xs font-semibold text-gray-200">{coin.symbol}</span>
-              <span className={`text-xs font-mono ${coin.change24h >= 0 ? 'text-bull' : 'text-bear'}`}>
-                {coin.change24h >= 0 ? '+' : ''}{coin.change24h.toFixed(1)}%
-              </span>
-            </Link>
-          ))}
+        // Marquee — duplicate the list so the scroll looks infinite
+        <div className="marquee-container">
+          <div className="marquee-track">
+            {[...coins, ...coins].map((coin, idx) => (
+              <Link
+                key={`${coin.symbol}-${idx}`}
+                href={`/coin/${coin.symbol.toLowerCase()}`}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border mx-1 flex-shrink-0 transition-all hover:scale-[1.08] ${
+                  coin.change24h >= 0
+                    ? 'border-green-500/20 hover:border-green-500/40 hover:bg-green-500/5'
+                    : 'border-red-500/20 hover:border-red-500/40 hover:bg-red-500/5'
+                } bg-surface-muted`}
+              >
+                <span className="text-gray-600 text-xs font-mono">#{(idx % coins.length) + 1}</span>
+                <span className="font-mono text-xs font-semibold text-gray-200">{coin.symbol}</span>
+                <span className={`text-xs font-mono ${coin.change24h >= 0 ? 'text-bull' : 'text-bear'}`}>
+                  {coin.change24h >= 0 ? '+' : ''}{coin.change24h.toFixed(1)}%
+                </span>
+              </Link>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -567,43 +637,65 @@ export default function DashboardClient() {
   const stream = useStreamPrices(STREAM_SYMBOLS)
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between animate-slide-in-left">
         <div>
-          <h1 className="text-2xl font-bold text-gray-100">
+          <h1 className="text-2xl font-bold text-shimmer">
             Market Overview
           </h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Real-time crypto intelligence — powered by Binance & CoinPaprika
+          <p className="text-sm text-gray-500 mt-1 animate-fade-in delay-200">
+            Real-time crypto intelligence — powered by Binance &amp; CoinPaprika
           </p>
         </div>
-        <MarketStatusBanner />
+        <div className="animate-slide-in-left delay-100">
+          <MarketStatusBanner />
+        </div>
       </div>
 
       {/* Market summary strip */}
-      <MarketSummaryStrip />
+      <div className="animate-slide-in-up delay-150">
+        <MarketSummaryStrip />
+      </div>
 
-      {/* BTC Live Chart — receives the stream so price is live */}
-      <BtcChartSection stream={stream} />
+      {/* BTC Live Chart */}
+      <div className="animate-slide-in-up delay-250">
+        <BtcChartSection stream={stream} />
+      </div>
 
       {/* Top Movers */}
-      <div>
+      <div className="animate-slide-in-up delay-300">
         <h2 className="text-base font-semibold text-gray-200 mb-3">Market Movers</h2>
         <TopMovers />
       </div>
 
       {/* Volume leaders */}
-      <VolumeLeaders />
+      <div className="animate-slide-in-up delay-400">
+        <VolumeLeaders />
+      </div>
 
       {/* Market heatmap */}
-      <MarketHeatmap />
+      <div className="animate-slide-in-up delay-500">
+        <MarketHeatmap />
+      </div>
+
+      {/* Funding rates */}
+      <div className="animate-slide-in-up delay-600">
+        <FundingRatesPanel />
+      </div>
+
+      {/* BTC Dominance + Altcoin Season */}
+      <div className="animate-slide-in-up delay-700">
+        <DominanceChart />
+      </div>
 
       {/* Correlation matrix */}
-      <CorrelationMatrix />
+      <div className="animate-slide-in-up delay-800">
+        <CorrelationMatrix />
+      </div>
 
-      {/* Watchlist — stream prices override stale REST prices */}
-      <div>
+      {/* Watchlist */}
+      <div className="animate-slide-in-up delay-800">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg font-semibold text-gray-200">Watchlist</h2>
           <span className="text-xs text-gray-600">BTC · ETH · SOL · BNB · ADA</span>
@@ -612,7 +704,9 @@ export default function DashboardClient() {
       </div>
 
       {/* Quick nav */}
-      <QuickNav />
+      <div className="animate-slide-in-up delay-800">
+        <QuickNav />
+      </div>
     </div>
   )
 }

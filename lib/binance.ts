@@ -39,12 +39,13 @@ export async function fetchKlines(
   symbol: string,
   interval: KlineInterval = '1h',
   limit = 200,
+  signal?: AbortSignal,
 ): Promise<Kline[]> {
   const sym = symbol.toUpperCase().endsWith('USDT')
     ? symbol.toUpperCase()
     : `${symbol.toUpperCase()}USDT`
   const url = `${BASE}/klines?symbol=${sym}&interval=${interval}&limit=${limit}`
-  const res = await fetch(url, { next: { revalidate: 60 } })
+  const res = await fetch(url, { next: { revalidate: 60 }, signal })
   if (!res.ok) throw new Error(`Binance klines error: ${res.status}`)
   const raw: unknown[][] = await res.json()
   return raw.map((k) => ({
@@ -58,15 +59,27 @@ export async function fetchKlines(
   }))
 }
 
-/** Fetch 24h ticker for one or all symbols */
+/** Fetch 24h ticker for one or all symbols.
+ *  Uses type=MINI for the all-symbols case to keep payload ≈600 KB (vs 2.4 MB).
+ *  MINI response has lastPrice + openPrice (we compute priceChangePercent ourselves)
+ *  and quoteVolume — sufficient for screener and top-movers.
+ */
 export async function fetch24hTicker(symbol?: string): Promise<Ticker24h[]> {
   const url = symbol
     ? `${BASE}/ticker/24hr?symbol=${symbol.toUpperCase()}USDT`
-    : `${BASE}/ticker/24hr`
+    : `${BASE}/ticker/24hr?type=MINI`
   const res = await fetch(url, { next: { revalidate: 30 } })
   if (!res.ok) throw new Error(`Binance ticker error: ${res.status}`)
-  const data = await res.json()
-  return Array.isArray(data) ? data : [data]
+  const data: (Ticker24h & { openPrice?: string })[] = await res.json()
+  const arr = Array.isArray(data) ? data : [data]
+  // MINI doesn't include priceChangePercent — compute it from openPrice
+  return arr.map((t) => {
+    if (t.priceChangePercent === undefined && t.openPrice) {
+      const pct = ((parseFloat(t.lastPrice) - parseFloat(t.openPrice)) / parseFloat(t.openPrice)) * 100
+      return { ...t, priceChangePercent: pct.toFixed(4) }
+    }
+    return t
+  })
 }
 
 /** Fetch current price */
@@ -102,6 +115,29 @@ export async function fetchOpenInterest(symbol: string): Promise<OpenInterest | 
     return await res.json() as OpenInterest
   } catch {
     return null
+  }
+}
+
+export interface PremiumIndex {
+  symbol: string
+  markPrice: string
+  indexPrice: string
+  estimatedSettlePrice: string
+  lastFundingRate: string
+  nextFundingTime: number
+  interestRate: string
+  time: number
+}
+
+/** Fetch premium index (funding rate) for all USDT perpetual futures in one call */
+export async function fetchAllFundingRates(): Promise<PremiumIndex[]> {
+  try {
+    const res = await fetch(`${FUTURES_BASE}/premiumIndex`, { next: { revalidate: 300 } })
+    if (!res.ok) return []
+    const data: PremiumIndex[] = await res.json()
+    return data.filter((d) => d.symbol.endsWith('USDT'))
+  } catch {
+    return []
   }
 }
 

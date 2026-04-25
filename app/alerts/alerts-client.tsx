@@ -1,48 +1,142 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useAlerts } from '@/hooks/useAlerts'
+import { useAlerts, AlertType, PriceAlert, TriggeredAlert } from '@/hooks/useAlerts'
 import { fetchPrice } from '@/lib/binance'
 import { searchCoins } from '@/lib/coingecko'
 import toast from 'react-hot-toast'
+import Link from 'next/link'
 
-const POPULAR = ['BTC', 'ETH', 'SOL', 'BNB', 'ADA', 'XRP', 'DOGE', 'AVAX', 'LINK', 'DOT']
+const POPULAR = ['BTC','ETH','SOL','BNB','ADA','XRP','DOGE','AVAX','LINK','DOT','MATIC','LTC']
 
-function fmt(n: number): string {
-  if (n >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 2 })
-  if (n >= 1) return n.toFixed(4)
-  return n.toFixed(6)
+function fmtPrice(n: number): string {
+  if (n >= 10000) return `$${n.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+  if (n >= 1000)  return `$${n.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+  if (n >= 1)     return `$${n.toFixed(4)}`
+  return `$${n.toFixed(6)}`
 }
 
+function timeAgo(ms: number): string {
+  const diff = Date.now() - ms
+  if (diff < 60_000) return 'just now'
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
+  return new Date(ms).toLocaleDateString()
+}
+
+// ─── Active Alert Row ─────────────────────────────────────────────────────────
+
+function AlertRow({ alert, livePrice, onRemove }: {
+  alert: PriceAlert
+  livePrice: number | undefined
+  onRemove: () => void
+}) {
+  const price = livePrice ?? alert.currentPrice
+  const dist = ((alert.targetPrice - price) / price) * 100
+  const triggered = alert.type === 'above' ? price >= alert.targetPrice : price <= alert.targetPrice
+  const dirColor = alert.type === 'above' ? 'text-bull' : 'text-bear'
+  const dirIcon  = alert.type === 'above' ? '▲' : '▼'
+
+  return (
+    <tr className="hover:bg-surface-muted/40 transition-colors">
+      <td className="py-3 pr-4">
+        <Link href={`/coin/${alert.symbol.toLowerCase()}`} className="font-mono font-bold text-gray-100 hover:text-blue-300 transition-colors">
+          {alert.symbol}
+        </Link>
+      </td>
+      <td className="py-3 px-3">
+        <span className={`inline-flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded ${
+          alert.type === 'above'
+            ? 'bg-green-500/10 text-bull border border-green-500/20'
+            : 'bg-red-500/10 text-bear border border-red-500/20'
+        }`}>
+          {dirIcon} {alert.type === 'above' ? 'Crosses above' : 'Drops below'}
+        </span>
+      </td>
+      <td className="py-3 px-3 text-right font-mono text-gray-100">{fmtPrice(alert.targetPrice)}</td>
+      <td className="py-3 px-3 text-right">
+        <div className="font-mono text-xs text-gray-400">{fmtPrice(price)}</div>
+        <div className={`text-xs font-mono font-bold ${dirColor}`}>
+          {dist >= 0 ? '+' : ''}{dist.toFixed(2)}%
+        </div>
+      </td>
+      <td className="py-3 px-3 text-right">
+        {/* Progress bar toward target */}
+        <div className="flex items-center justify-end gap-2">
+          {triggered ? (
+            <span className="text-xs text-warn font-mono animate-pulse">Triggering…</span>
+          ) : (
+            <div className="w-20 h-1.5 bg-surface-muted rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-700 ${alert.type === 'above' ? 'bg-bull' : 'bg-bear'}`}
+                style={{ width: `${Math.min(100, Math.max(0, 100 - Math.abs(dist)))}%`, opacity: 0.75 }}
+              />
+            </div>
+          )}
+        </div>
+      </td>
+      <td className="py-3 px-3 text-right text-xs text-gray-600">{timeAgo(alert.createdAt)}</td>
+      <td className="py-3 pl-3 text-right">
+        <button onClick={onRemove} className="text-gray-600 hover:text-bear transition-colors text-xs px-2 py-1 rounded hover:bg-red-500/10">
+          Remove
+        </button>
+      </td>
+    </tr>
+  )
+}
+
+// ─── Triggered History Row ─────────────────────────────────────────────────────
+
+function HistoryRow({ item }: { item: TriggeredAlert }) {
+  return (
+    <tr className="opacity-70">
+      <td className="py-2 pr-4">
+        <Link href={`/coin/${item.symbol.toLowerCase()}`} className="font-mono font-bold text-gray-400 hover:text-gray-200 transition-colors">
+          {item.symbol}
+        </Link>
+      </td>
+      <td className="py-2 px-3">
+        <span className={`text-xs font-mono ${item.type === 'above' ? 'text-green-600' : 'text-red-600'}`}>
+          {item.type === 'above' ? '▲ above' : '▼ below'} {fmtPrice(item.targetPrice)}
+        </span>
+      </td>
+      <td className="py-2 px-3 text-right font-mono text-xs text-gray-500">
+        triggered @ {fmtPrice(item.triggerPrice)}
+      </td>
+      <td className="py-2 pl-3 text-right text-xs text-gray-600">{timeAgo(item.triggeredAt)}</td>
+    </tr>
+  )
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
+
 export default function AlertsClient() {
-  const { alerts, addAlert, removeAlert } = useAlerts()
-  const [symbol, setSymbol] = useState('')
+  const { alerts, history, livePrices, addAlert, removeAlert, clearHistory } = useAlerts()
+
+  const [symbol, setSymbol]     = useState('')
   const [targetPrice, setTargetPrice] = useState('')
+  const [alertType, setAlertType]     = useState<AlertType>('above')
   const [currentPrice, setCurrentPrice] = useState<number | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading]   = useState(false)
   const [suggestions, setSuggestions] = useState<{ symbol: string; name: string }[]>([])
   const [showSuggestions, setShowSuggestions] = useState(false)
+  const [tab, setTab] = useState<'active' | 'history'>('active')
 
-  // Request notification permission
-  useEffect(() => {
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission()
-    }
-  }, [])
-
-  // Fetch current price when symbol changes
+  // Fetch current price with debounce
   useEffect(() => {
     if (!symbol) { setCurrentPrice(null); return }
     const timer = setTimeout(async () => {
-      try {
-        const p = await fetchPrice(symbol)
-        setCurrentPrice(p)
-      } catch {
-        setCurrentPrice(null)
-      }
+      try { setCurrentPrice(await fetchPrice(symbol)) }
+      catch { setCurrentPrice(null) }
     }, 500)
     return () => clearTimeout(timer)
   }, [symbol])
+
+  // Auto-set alert type based on target vs current price
+  useEffect(() => {
+    if (!targetPrice || !currentPrice) return
+    setAlertType(parseFloat(targetPrice) >= currentPrice ? 'above' : 'below')
+  }, [targetPrice, currentPrice])
 
   // Autocomplete
   useEffect(() => {
@@ -52,9 +146,7 @@ export default function AlertsClient() {
         const res = await searchCoins(symbol)
         setSuggestions(res.coins.slice(0, 5).map((c) => ({ symbol: c.symbol.toUpperCase(), name: c.name })))
         setShowSuggestions(true)
-      } catch {
-        setSuggestions([])
-      }
+      } catch { setSuggestions([]) }
     }, 300)
     return () => clearTimeout(timer)
   }, [symbol])
@@ -65,8 +157,9 @@ export default function AlertsClient() {
     setLoading(true)
     try {
       const price = currentPrice ?? await fetchPrice(symbol)
-      addAlert(symbol, parseFloat(targetPrice), price)
-      toast.success(`Alert set for ${symbol.toUpperCase()} at $${parseFloat(targetPrice).toLocaleString()}`)
+      const target = parseFloat(targetPrice)
+      addAlert(symbol, target, price, alertType)
+      toast.success(`Alert set: ${symbol.toUpperCase()} ${alertType === 'above' ? '▲ above' : '▼ below'} ${fmtPrice(target)}`)
       setSymbol('')
       setTargetPrice('')
       setCurrentPrice(null)
@@ -77,23 +170,42 @@ export default function AlertsClient() {
     }
   }
 
+  const notifBlocked = typeof window !== 'undefined'
+    && 'Notification' in window
+    && Notification.permission === 'denied'
+
   return (
-    <div className="space-y-8 animate-fade-in max-w-2xl mx-auto">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-100">Price Alerts</h1>
+    <div className="space-y-6 max-w-3xl mx-auto">
+      {/* Header */}
+      <div className="animate-slide-in-left">
+        <h1 className="text-2xl font-bold text-shimmer">Price Alerts</h1>
         <p className="text-sm text-gray-500 mt-1">
-          Get notified when a coin reaches your target price. Alerts are stored locally and checked every 60 seconds.
+          Real-time WebSocket notifications when coins cross your target price.
         </p>
       </div>
 
-      {/* Form */}
-      <div className="card">
+      {notifBlocked && (
+        <div className="card bg-amber-500/5 border border-amber-500/20 text-xs text-amber-400 px-4 py-3">
+          Browser notifications are blocked. Enable them in site settings to receive alerts.
+        </div>
+      )}
+
+      {/* WebSocket status */}
+      {alerts.length > 0 && (
+        <div className="flex items-center gap-2 text-xs text-gray-600">
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+          Monitoring {[...new Set(alerts.map((a) => a.symbol))].join(', ')} via WebSocket
+        </div>
+      )}
+
+      {/* New Alert Form */}
+      <div className="card animate-slide-in-up delay-100">
         <h2 className="text-sm font-semibold text-gray-300 mb-4">New Alert</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Symbol input with autocomplete */}
+          {/* Symbol */}
           <div className="relative">
             <label className="block text-xs text-gray-500 mb-1">Coin Symbol</label>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               <div className="relative flex-1">
                 <input
                   type="text"
@@ -108,8 +220,7 @@ export default function AlertsClient() {
                   <div className="absolute top-full mt-1 w-full bg-surface-card border border-surface-border rounded-xl z-10 overflow-hidden shadow-xl">
                     {suggestions.map((s) => (
                       <button
-                        key={s.symbol}
-                        type="button"
+                        key={s.symbol} type="button"
                         onMouseDown={() => { setSymbol(s.symbol); setShowSuggestions(false) }}
                         className="w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-surface-muted text-left"
                       >
@@ -121,145 +232,141 @@ export default function AlertsClient() {
                 )}
               </div>
               {currentPrice && (
-                <div className="text-xs text-gray-400 font-mono shrink-0">
-                  Now: ${fmt(currentPrice)}
+                <div className="text-xs text-gray-400 font-mono shrink-0 bg-surface-muted px-2 py-1.5 rounded-lg">
+                  Now: {fmtPrice(currentPrice)}
                 </div>
               )}
             </div>
-
-            {/* Quick select */}
+            {/* Quick picks */}
             <div className="flex flex-wrap gap-1 mt-2">
               {POPULAR.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setSymbol(s)}
+                <button key={s} type="button" onClick={() => setSymbol(s)}
                   className={`px-2 py-0.5 rounded text-xs font-mono transition-colors ${
-                    symbol === s
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-surface-muted text-gray-400 hover:text-gray-200'
-                  }`}
-                >
-                  {s}
-                </button>
+                    symbol === s ? 'bg-blue-600 text-white' : 'bg-surface-muted text-gray-400 hover:text-gray-200'
+                  }`}>{s}</button>
               ))}
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">Target Price (USD)</label>
-            <input
-              type="number"
-              value={targetPrice}
-              onChange={(e) => setTargetPrice(e.target.value)}
-              placeholder="e.g. 100000"
-              step="any"
-              min="0"
-              className="input font-mono"
-              required
-            />
-            {currentPrice && targetPrice && (
-              <div className="text-xs mt-1 text-gray-500">
-                Distance: {(((parseFloat(targetPrice) - currentPrice) / currentPrice) * 100).toFixed(2)}% from current
+          {/* Target price + type */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Target Price (USD)</label>
+              <input
+                type="number" value={targetPrice}
+                onChange={(e) => setTargetPrice(e.target.value)}
+                placeholder="e.g. 100000" step="any" min="0"
+                className="input font-mono" required
+              />
+              {currentPrice && targetPrice && (
+                <div className="text-xs mt-1 text-gray-600">
+                  {(((parseFloat(targetPrice) - currentPrice) / currentPrice) * 100).toFixed(2)}% from current price
+                </div>
+              )}
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Alert Type</label>
+              <div className="grid grid-cols-2 gap-2">
+                {(['above', 'below'] as AlertType[]).map((t) => (
+                  <button key={t} type="button" onClick={() => setAlertType(t)}
+                    className={`py-2 rounded-lg text-sm font-medium transition-all ${
+                      alertType === t
+                        ? t === 'above'
+                          ? 'bg-green-600/30 border border-green-500/50 text-bull'
+                          : 'bg-red-600/30 border border-red-500/50 text-bear'
+                        : 'bg-surface-muted text-gray-400 hover:text-gray-200 border border-transparent'
+                    }`}
+                  >
+                    {t === 'above' ? '▲ Crosses Above' : '▼ Drops Below'}
+                  </button>
+                ))}
               </div>
-            )}
+            </div>
           </div>
 
           <button type="submit" disabled={loading || !symbol || !targetPrice} className="btn-primary w-full">
-            {loading ? 'Setting alert…' : 'Set Alert'}
+            {loading ? 'Setting alert…' : `Set Alert — ${alertType === 'above' ? '▲' : '▼'} ${symbol || '…'} ${targetPrice ? fmtPrice(parseFloat(targetPrice)) : ''}`}
           </button>
         </form>
       </div>
 
-      {/* Active Alerts Table */}
-      <div className="card">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-gray-300">Active Alerts</h2>
-          <span className="text-xs text-gray-500 font-mono">{alerts.length} alert{alerts.length !== 1 ? 's' : ''}</span>
+      {/* Tabs: Active / History */}
+      <div className="animate-slide-in-up delay-200">
+        <div className="flex items-center gap-1 mb-4">
+          {(['active', 'history'] as const).map((t) => (
+            <button key={t} onClick={() => setTab(t)}
+              className={`px-4 py-1.5 rounded-lg text-sm font-medium capitalize transition-colors ${
+                tab === t ? 'bg-blue-600 text-white' : 'bg-surface-muted text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              {t}
+              {t === 'active' && alerts.length > 0 && (
+                <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-blue-500/30 text-xs">{alerts.length}</span>
+              )}
+            </button>
+          ))}
+          {tab === 'history' && history.length > 0 && (
+            <button onClick={clearHistory} className="ml-auto text-xs text-gray-600 hover:text-gray-400 transition-colors">
+              Clear history
+            </button>
+          )}
         </div>
 
-        {alerts.length === 0 ? (
-          <p className="text-gray-500 text-sm text-center py-8">No active alerts. Add one above.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-xs text-gray-500 border-b border-surface-border">
-                  <th className="text-left pb-2 font-medium">Coin</th>
-                  <th className="text-right pb-2 font-medium">Target</th>
-                  <th className="text-right pb-2 font-medium">Created</th>
-                  <th className="text-right pb-2 font-medium"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-surface-border">
-                {alerts.map((alert) => (
-                  <AlertRow key={alert.id} alert={alert} onRemove={() => removeAlert(alert.id)} />
-                ))}
-              </tbody>
-            </table>
+        {/* Active alerts */}
+        {tab === 'active' && (
+          <div className="card overflow-x-auto">
+            {alerts.length === 0 ? (
+              <p className="text-gray-500 text-sm text-center py-10">No active alerts. Add one above.</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs text-gray-500 border-b border-surface-border">
+                    <th className="text-left py-3 pr-4 font-medium">Coin</th>
+                    <th className="text-left py-3 px-3 font-medium">Type</th>
+                    <th className="text-right py-3 px-3 font-medium">Target</th>
+                    <th className="text-right py-3 px-3 font-medium">Current</th>
+                    <th className="text-right py-3 px-3 font-medium">Progress</th>
+                    <th className="text-right py-3 px-3 font-medium">Set</th>
+                    <th className="py-3 pl-3" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-surface-border/50">
+                  {alerts.map((a) => (
+                    <AlertRow key={a.id} alert={a} livePrice={livePrices[a.symbol]} onRemove={() => removeAlert(a.id)} />
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+
+        {/* Triggered history */}
+        {tab === 'history' && (
+          <div className="card overflow-x-auto">
+            {history.length === 0 ? (
+              <p className="text-gray-500 text-sm text-center py-10">No triggered alerts yet.</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs text-gray-500 border-b border-surface-border">
+                    <th className="text-left py-3 pr-4 font-medium">Coin</th>
+                    <th className="text-left py-3 px-3 font-medium">Alert</th>
+                    <th className="text-right py-3 px-3 font-medium">Trigger Price</th>
+                    <th className="text-right py-3 pl-3 font-medium">When</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-surface-border/50">
+                  {history.map((item) => <HistoryRow key={item.id + item.triggeredAt} item={item} />)}
+                </tbody>
+              </table>
+            )}
           </div>
         )}
       </div>
 
       <p className="text-xs text-gray-600 text-center">
-        Alerts trigger when price is within 0.5% of target. Requires tab to be open.
-        {' '}
-        {typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'denied' && (
-          <span className="text-warn">Browser notifications blocked — enable in site settings.</span>
-        )}
+        Alerts checked in real-time via Binance WebSocket · Stored locally · Tab must remain open
       </p>
     </div>
-  )
-}
-
-interface AlertRowProps {
-  alert: { id: string; symbol: string; targetPrice: number; currentPrice: number; createdAt: number }
-  onRemove: () => void
-}
-
-function AlertRow({ alert, onRemove }: AlertRowProps) {
-  const [livePrice, setLivePrice] = useState<number | null>(null)
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const p = await fetchPrice(alert.symbol)
-        setLivePrice(p)
-      } catch {
-        setLivePrice(null)
-      }
-    }
-    load()
-    const id = setInterval(load, 60_000)
-    return () => clearInterval(id)
-  }, [alert.symbol])
-
-  const price = livePrice ?? alert.currentPrice
-  const dist = (((alert.targetPrice - price) / price) * 100).toFixed(2)
-  const isAbove = alert.targetPrice > price
-
-  return (
-    <tr>
-      <td className="py-2">
-        <span className="font-mono font-bold text-gray-100">{alert.symbol}</span>
-      </td>
-      <td className="py-2 text-right">
-        <div className="font-mono text-gray-100">${fmt(alert.targetPrice)}</div>
-        <div className={`text-xs font-mono ${isAbove ? 'text-bull' : 'text-bear'}`}>
-          {isAbove ? '▲' : '▼'} {Math.abs(parseFloat(dist))}%
-        </div>
-      </td>
-      <td className="py-2 text-right text-xs text-gray-500">
-        {new Date(alert.createdAt).toLocaleDateString()}
-      </td>
-      <td className="py-2 text-right">
-        <button
-          onClick={onRemove}
-          className="text-xs text-gray-500 hover:text-bear transition-colors"
-        >
-          Remove
-        </button>
-      </td>
-    </tr>
   )
 }
