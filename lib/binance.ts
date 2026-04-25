@@ -77,9 +77,8 @@ export async function fetchKlinesCryptoCompare(
   signal?: AbortSignal,
 ): Promise<Kline[]> {
   const iv = CC_INTERVAL[interval] ?? CC_INTERVAL['1h']
-  // CryptoCompare needs raw limit per aggregate; for 4h we fetch limit*1 points (each is already 4h aggregated)
-  const url = `https://min-api.cryptocompare.com/data/v2/${iv.endpoint}?fsym=${symbol.toUpperCase()}&tsym=USDT&limit=${limit}&aggregate=${iv.aggregate}`
-  const res = await fetch(url, { next: { revalidate: 60 }, signal })
+  const url = `https://min-api.cryptocompare.com/data/v2/${iv.endpoint}?fsym=${symbol.toUpperCase()}&tsym=USD&limit=${limit}&aggregate=${iv.aggregate}`
+  const res = await fetch(url, { cache: 'no-store', signal })
   if (!res.ok) throw new Error(`CryptoCompare klines error: ${res.status}`)
   const json: {
     Response: string
@@ -94,6 +93,56 @@ export async function fetchKlinesCryptoCompare(
     close:     k.close,
     volume:    k.volumefrom,
     closeTime: k.time * 1000 + 3_600_000,
+  }))
+}
+
+// Kraken interval map — free, no auth, no cloud IP blocking
+const KRAKEN_INTERVAL: Record<string, number> = {
+  '1h': 60,
+  '4h': 240,
+  '1d': 1440,
+}
+
+// Kraken uses different pair naming for some symbols
+const KRAKEN_SYMBOL_MAP: Record<string, string> = {
+  BTC:  'XBT',
+  SHIB: 'SHIB',
+  PEPE: 'PEPE',
+}
+
+/**
+ * Fetch OHLCV klines from Kraken (works from cloud server IPs, no rate limiting).
+ * Primary kline source for the screener on Vercel.
+ */
+export async function fetchKlinesKraken(
+  symbol: string,
+  interval: KlineInterval = '1h',
+  limit = 200,
+  signal?: AbortSignal,
+): Promise<Kline[]> {
+  const sym = symbol.toUpperCase()
+  const krakenSym = KRAKEN_SYMBOL_MAP[sym] ?? sym
+  const krakenInterval = KRAKEN_INTERVAL[interval] ?? 60
+  const url = `https://api.kraken.com/0/public/OHLC?pair=${krakenSym}USD&interval=${krakenInterval}&count=${limit}`
+  const res = await fetch(url, { cache: 'no-store', signal })
+  if (!res.ok) throw new Error(`Kraken klines error: ${res.status}`)
+  const json: {
+    error: string[]
+    result: Record<string, [number, string, string, string, string, string, string, number][]>
+  } = await res.json()
+  if (json.error?.length) throw new Error(`Kraken: ${json.error[0]}`)
+  const pairKey = Object.keys(json.result).find((k) => k !== 'last')
+  if (!pairKey) throw new Error(`Kraken: no pair data for ${sym}`)
+  const candles = json.result[pairKey]
+  const intervalMs = krakenInterval * 60 * 1000
+  return candles.map((k) => ({
+    openTime:  k[0] * 1000,
+    open:      parseFloat(k[1]),
+    high:      parseFloat(k[2]),
+    low:       parseFloat(k[3]),
+    close:     parseFloat(k[4]),
+    volume:    parseFloat(k[6]),
+    closeTime: k[0] * 1000 + intervalMs - 1,
   }))
 }
 
