@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { fetchKlines, fetch24hTicker } from '@/lib/binance'
+import { fetchKlines, fetchKlinesCryptoCompare, fetch24hTicker } from '@/lib/binance'
 import { scoreSignal } from '@/lib/scoring'
 import { calcRSI } from '@/lib/indicators'
 import { detectPatterns } from '@/lib/patterns'
@@ -37,11 +37,31 @@ async function fetchCoinData(
 ): Promise<ScreenerCoin | null> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), KLINE_TIMEOUT_MS)
-  try {
-    const klines = await fetchKlines(symbol, interval, 200, controller.signal)
-    clearTimeout(timer)
-    if (klines.length < 14) return null
 
+  let klines
+  try {
+    // Try Binance first (fast, detailed); may be blocked on cloud IPs
+    klines = await fetchKlines(symbol, interval, 200, controller.signal)
+  } catch (binanceErr) {
+    clearTimeout(timer)
+    const msg = binanceErr instanceof Error ? binanceErr.message : String(binanceErr)
+    if (!msg.includes('abort')) {
+      // Binance blocked or errored — fall back to CryptoCompare
+      try {
+        klines = await fetchKlinesCryptoCompare(symbol, interval, 200)
+      } catch (ccErr) {
+        console.warn(`[screener] ${symbol} both sources failed: ${ccErr instanceof Error ? ccErr.message : ccErr}`)
+        return null
+      }
+    } else {
+      return null
+    }
+  }
+  clearTimeout(timer)
+
+  if (!klines || klines.length < 14) return null
+
+  try {
     const score = scoreSignal(klines)
     const closes = klines.map((k) => k.close)
     const rsiArr = calcRSI(closes, 14)
@@ -60,9 +80,7 @@ async function fetchCoinData(
       pattern: topPattern ? { name: topPattern.name, type: topPattern.type } : null,
     }
   } catch (err) {
-    clearTimeout(timer)
-    const msg = err instanceof Error ? err.message : String(err)
-    console.warn(`[screener] ${symbol} failed: ${msg}`)
+    console.warn(`[screener] ${symbol} scoring failed: ${err instanceof Error ? err.message : err}`)
     return null
   }
 }

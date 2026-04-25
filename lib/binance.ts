@@ -59,6 +59,44 @@ export async function fetchKlines(
   }))
 }
 
+// CryptoCompare interval map (used as fallback when Binance blocks cloud IPs)
+const CC_INTERVAL: Record<string, { endpoint: string; aggregate: number }> = {
+  '1h': { endpoint: 'histohour', aggregate: 1  },
+  '4h': { endpoint: 'histohour', aggregate: 4  },
+  '1d': { endpoint: 'histoday',  aggregate: 1  },
+}
+
+/**
+ * Fetch OHLCV klines from CryptoCompare (works from cloud server IPs).
+ * Used as a fallback for the screener when Binance blocks the server.
+ */
+export async function fetchKlinesCryptoCompare(
+  symbol: string,
+  interval: KlineInterval = '1h',
+  limit = 200,
+  signal?: AbortSignal,
+): Promise<Kline[]> {
+  const iv = CC_INTERVAL[interval] ?? CC_INTERVAL['1h']
+  // CryptoCompare needs raw limit per aggregate; for 4h we fetch limit*1 points (each is already 4h aggregated)
+  const url = `https://min-api.cryptocompare.com/data/v2/${iv.endpoint}?fsym=${symbol.toUpperCase()}&tsym=USDT&limit=${limit}&aggregate=${iv.aggregate}`
+  const res = await fetch(url, { next: { revalidate: 60 }, signal })
+  if (!res.ok) throw new Error(`CryptoCompare klines error: ${res.status}`)
+  const json: {
+    Response: string
+    Data: { Data: { time: number; open: number; high: number; low: number; close: number; volumefrom: number }[] }
+  } = await res.json()
+  if (json.Response !== 'Success') throw new Error(`CryptoCompare: ${json.Response}`)
+  return json.Data.Data.map((k) => ({
+    openTime:  k.time * 1000,
+    open:      k.open,
+    high:      k.high,
+    low:       k.low,
+    close:     k.close,
+    volume:    k.volumefrom,
+    closeTime: k.time * 1000 + 3_600_000,
+  }))
+}
+
 /** Fetch 24h ticker for one or all symbols.
  *  Uses type=MINI for the all-symbols case to keep payload ≈600 KB (vs 2.4 MB).
  *  MINI response has lastPrice + openPrice (we compute priceChangePercent ourselves)
