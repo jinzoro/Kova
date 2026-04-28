@@ -178,15 +178,13 @@ export interface MTFConsensus {
 }
 
 export function calcMTFConsensus(
-  scores1h: SignalScore,
-  scores4h: SignalScore,
-  scores1d: SignalScore,
+  entries: Array<{ timeframe: string; score: SignalScore; weight: number }>,
 ): MTFConsensus {
-  const scores: MTFScore[] = [
-    { timeframe: '1h', score: scores1h, weight: 1 },
-    { timeframe: '4h', score: scores4h, weight: 2 },
-    { timeframe: '1d', score: scores1d, weight: 3 },
-  ]
+  const scores: MTFScore[] = entries.map((e) => ({
+    timeframe: e.timeframe,
+    score: e.score,
+    weight: e.weight,
+  }))
 
   const totalWeight = scores.reduce((a, s) => a + s.weight, 0)
   const weighted = scores.reduce((a, s) => a + s.score.total * s.weight, 0) / totalWeight
@@ -194,9 +192,7 @@ export function calcMTFConsensus(
 
   const allBull = scores.every((s) => s.score.total > 0)
   const allBear = scores.every((s) => s.score.total < 0)
-  const allSame = scores.every(
-    (s) => s.score.label === scores[0].score.label,
-  )
+  const allSame = scores.every((s) => s.score.label === scores[0].score.label)
 
   const agreement = allSame
     ? 'Strong Agreement'

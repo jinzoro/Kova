@@ -65,25 +65,50 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
+const MTF_OPTIONS: { interval: KlineInterval; label: string; weight: number }[] = [
+  { interval: '15m', label: '15m', weight: 1 },
+  { interval: '30m', label: '30m', weight: 2 },
+  { interval: '1h',  label: '1h',  weight: 3 },
+  { interval: '4h',  label: '4h',  weight: 4 },
+  { interval: '1d',  label: '1d',  weight: 5 },
+  { interval: '1w',  label: '1w',  weight: 6 },
+]
+
 function MTFPanel({ symbol }: { symbol: string }) {
-  const { data: k1h } = useKlines(symbol, '1h', 200)
-  const { data: k4h } = useKlines(symbol, '4h', 200)
-  const { data: k1d } = useKlines(symbol, '1d', 200)
+  const [selected, setSelected] = useState<KlineInterval[]>(['1h', '4h', '1d'])
+
+  // Always fetch all supported MTF intervals so switching is instant
+  const { data: k15m } = useKlines(symbol, '15m', 200)
+  const { data: k30m } = useKlines(symbol, '30m', 200)
+  const { data: k1h }  = useKlines(symbol, '1h',  200)
+  const { data: k4h }  = useKlines(symbol, '4h',  200)
+  const { data: k1d }  = useKlines(symbol, '1d',  200)
+  const { data: k1w }  = useKlines(symbol, '1w',  100)
 
   const consensus = useMemo(() => {
-    if (!k1h || !k4h || !k1d) return null
-    return calcMTFConsensus(scoreSignal(k1h), scoreSignal(k4h), scoreSignal(k1d))
-  }, [k1h, k4h, k1d])
+    const byInterval: Record<string, typeof k1h> = {
+      '15m': k15m, '30m': k30m, '1h': k1h, '4h': k4h, '1d': k1d, '1w': k1w,
+    }
+    const entries = MTF_OPTIONS
+      .filter((tf) => selected.includes(tf.interval))
+      .map((tf) => {
+        const klines = byInterval[tf.interval]
+        if (!klines || klines.length < 30) return null
+        return { timeframe: tf.label, score: scoreSignal(klines), weight: tf.weight }
+      })
+      .filter((e): e is NonNullable<typeof e> => e !== null)
+    if (entries.length < 2) return null
+    return calcMTFConsensus(entries)
+  }, [selected, k15m, k30m, k1h, k4h, k1d, k1w])
 
-  if (!consensus) {
-    return (
-      <div className="card space-y-3 animate-pulse">
-        <div className="skeleton h-4 w-48 rounded" />
-        <div className="grid grid-cols-3 gap-3">
-          {[0,1,2].map((i) => <div key={i} className="skeleton h-20 rounded-lg" />)}
-        </div>
-      </div>
-    )
+  function toggleTF(interval: KlineInterval) {
+    setSelected((prev) => {
+      if (prev.includes(interval)) {
+        if (prev.length <= 2) return prev
+        return prev.filter((i) => i !== interval)
+      }
+      return [...prev, interval]
+    })
   }
 
   const labelColor = (label: string) => {
@@ -94,6 +119,30 @@ function MTFPanel({ symbol }: { symbol: string }) {
     return 'text-warn'
   }
 
+  const weightSummary = MTF_OPTIONS
+    .filter((tf) => selected.includes(tf.interval))
+    .sort((a, b) => b.weight - a.weight)
+    .map((tf) => `${tf.label}×${tf.weight}`)
+    .join(', ')
+
+  const gridCols = selected.length <= 2 ? 'grid-cols-2' : selected.length === 3 ? 'grid-cols-3' : 'grid-cols-2 sm:grid-cols-4'
+
+  if (!consensus) {
+    return (
+      <div className="card space-y-4 animate-pulse">
+        <div className="flex flex-wrap gap-1.5">
+          {MTF_OPTIONS.map((tf) => (
+            <div key={tf.interval} className="skeleton h-6 w-10 rounded-full" />
+          ))}
+        </div>
+        <div className="skeleton h-4 w-48 rounded" />
+        <div className="grid grid-cols-3 gap-3">
+          {[0,1,2].map((i) => <div key={i} className="skeleton h-20 rounded-lg" />)}
+        </div>
+      </div>
+    )
+  }
+
   const agreementColor = {
     'Strong Agreement': 'text-bull',
     'Agreement': 'text-green-400',
@@ -101,13 +150,40 @@ function MTFPanel({ symbol }: { symbol: string }) {
     'Disagreement': 'text-bear',
   }[consensus.agreement]
 
+  const n = consensus.scores.length
+  const allWord = n === 2 ? 'Both' : `All ${n}`
+
   return (
     <div className="card space-y-4">
+      {/* Timeframe selector */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-xs text-gray-500 mr-1">Timeframes:</span>
+        {MTF_OPTIONS.map((tf) => {
+          const active = selected.includes(tf.interval)
+          const isLast = active && selected.length <= 2
+          return (
+            <button
+              key={tf.interval}
+              onClick={() => toggleTF(tf.interval)}
+              disabled={isLast}
+              title={isLast ? 'Minimum 2 timeframes required' : undefined}
+              className={`text-xs px-2.5 py-0.5 rounded-full font-mono border transition-colors ${
+                active
+                  ? 'bg-blue-500/20 border-blue-500/50 text-blue-300'
+                  : 'bg-surface-muted border-surface-border text-gray-500 hover:text-gray-300 hover:border-gray-500'
+              } disabled:opacity-40 disabled:cursor-not-allowed`}
+            >
+              {tf.label}
+            </button>
+          )
+        })}
+      </div>
+
       <div className="flex items-center justify-between">
         <div>
           <div className="text-sm font-semibold text-gray-300">Multi-Timeframe Consensus</div>
           <div className="text-xs text-gray-500 mt-0.5">
-            Weighted: 1d×3, 4h×2, 1h×1 — {' '}
+            Weighted: {weightSummary} —{' '}
             <span className={agreementColor}>{consensus.agreement}</span>
           </div>
         </div>
@@ -119,7 +195,7 @@ function MTFPanel({ symbol }: { symbol: string }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className={`grid ${gridCols} gap-3`}>
         {consensus.scores.map(({ timeframe, score, weight }) => (
           <div key={timeframe} className="bg-surface-muted rounded-xl p-3 text-center space-y-1">
             <div className="text-xs text-gray-500 font-mono">
@@ -129,7 +205,6 @@ function MTFPanel({ symbol }: { symbol: string }) {
               {score.total > 0 ? '+' : ''}{score.total}
             </div>
             <div className={`text-xs ${labelColor(score.label)}`}>{score.label}</div>
-            {/* Mini breakdown */}
             <div className="flex justify-center gap-0.5 pt-1">
               {score.breakdown.slice(0, 6).map((b, i) => (
                 <div
@@ -145,9 +220,9 @@ function MTFPanel({ symbol }: { symbol: string }) {
 
       <div className="text-xs text-gray-500 leading-relaxed bg-surface-muted rounded-lg px-3 py-2">
         {consensus.agreement === 'Strong Agreement'
-          ? `All three timeframes agree: ${consensus.label}. This is the highest-confidence setup — ${consensus.weighted > 0 ? 'trend is confirmed across all horizons.' : 'avoid longs until at least one timeframe turns positive.'}`
+          ? `${allWord} timeframes agree: ${consensus.label}. This is the highest-confidence setup — ${consensus.weighted > 0 ? 'trend is confirmed across all horizons.' : 'avoid longs until at least one timeframe turns positive.'}`
           : consensus.agreement === 'Agreement'
-            ? `Most timeframes lean ${consensus.weighted >= 0 ? 'bullish' : 'bearish'}. The ${consensus.weighted >= 0 ? 'higher' : 'lower'} timeframes carry more weight in the consensus.`
+            ? `Most timeframes lean ${consensus.weighted >= 0 ? 'bullish' : 'bearish'}. Higher timeframes carry more weight in the consensus.`
             : consensus.agreement === 'Mixed'
               ? 'Timeframes are showing conflicting signals. Higher timeframe direction should take priority. Wait for alignment before committing.'
               : 'Timeframes are in disagreement. This is an indecisive environment — reduce size and wait for clearer structure.'}

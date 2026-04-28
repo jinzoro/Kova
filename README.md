@@ -33,7 +33,7 @@ A professional real-time cryptocurrency analytics dashboard with technical analy
 - **8+ technical indicators** (EMA, RSI, MACD, Bollinger Bands, ATR, OBV, Stochastic RSI, Swing Levels)
 - **10+ candlestick patterns** detected automatically
 - **Signal scoring engine** — composite score from −10 to +10
-- **Multi-timeframe consensus** across 1h, 4h, and 1d
+- **Multi-timeframe consensus** — interactive selector across 15m, 30m, 1h, 4h, 1d, and 1w
 - **Holt-Winters price forecast** — 5 candles ahead with 95% confidence bands
 - **Support & resistance levels** — automatic swing pivot detection
 - **Price alerts** with browser push notifications
@@ -547,31 +547,43 @@ The score is a **decision support tool**, not a mechanical trading system.
 
 ## Multi-Timeframe Analysis
 
-The app calculates signal scores across three timeframes and weights them to produce a consensus.
+The app calculates signal scores across multiple timeframes and combines them into a weighted consensus. You can toggle which timeframes to include directly on the coin detail page — the consensus updates instantly.
 
-### Weights
+### Available Timeframes
 
-| Timeframe | Weight | Rationale |
-|---|---|---|
-| 1h | ×1 | Short-term noise — low weight |
-| 4h | ×2 | Intermediate trend — medium weight |
-| 1d | ×3 | Primary trend — highest weight |
+| Timeframe | Weight | Candles Fetched | Best For |
+|---|---|---|---|
+| 15m | ×1 | 200 (~2 days) | Short-term timing, scalping context |
+| 30m | ×2 | 200 (~4 days) | Intraday swing context |
+| 1h | ×3 | 200 (~8 days) | Short-swing entries and exits |
+| 4h | ×4 | 200 (~33 days) | Intermediate trend confirmation |
+| 1d | ×5 | 200 (~6.5 months) | Primary trend direction |
+| 1w | ×6 | 100 (~1.9 years) | Macro bias and long-term structure |
+
+Higher weights mean the timeframe has more influence on the consensus score. Weekly and daily signals outweigh shorter-term noise.
+
+### Default Selection
+
+The panel defaults to **1h, 4h, and 1d** — the most useful combination for swing trading. Select any two or more timeframes using the toggle buttons at the top of the panel.
+
+> Minimum 2 timeframes required. All timeframe data is prefetched in the background so switching between combinations is instant.
 
 ### Consensus Levels
 
 | Agreement | Description |
 |---|---|
-| **Strong Agreement** | All three timeframes point the same direction |
-| **Agreement** | Two timeframes aligned, one neutral or slightly different |
-| **Mixed** | Timeframes are pointing in different directions |
+| **Strong Agreement** | All selected timeframes point the same direction |
+| **Agreement** | All timeframes bullish or all bearish (but not identical labels) |
+| **Mixed** | Timeframes diverge but the weighted score is above ±2 |
 | **Disagreement** | Timeframes in direct conflict — high uncertainty |
 
 ### How to use MTF Consensus
 
-1. **Only trade in the direction of Strong Agreement** — all three timeframes must agree
-2. **Use 1h for timing entries** when 4h and 1d both agree on direction
+1. **Only trade in the direction of Strong Agreement** — all selected timeframes must agree
+2. **Use short timeframes (15m/30m) for timing entries** once the higher timeframes confirm direction
 3. **Mixed signals** = stay flat or wait — the market hasn't made up its mind
-4. **Disagreement** often appears at major turning points — watch for reversal patterns
+4. **Add 1w** for a macro sanity check — a 1d bullish signal in a multi-year bear market carries less weight
+5. **Disagreement** often appears at major turning points — watch for reversal patterns
 
 ---
 
