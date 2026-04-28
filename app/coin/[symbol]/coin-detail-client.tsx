@@ -70,8 +70,12 @@ const MTF_OPTIONS: { interval: KlineInterval; label: string; weight: number }[] 
   { interval: '30m', label: '30m', weight: 2 },
   { interval: '1h',  label: '1h',  weight: 3 },
   { interval: '4h',  label: '4h',  weight: 4 },
-  { interval: '1d',  label: '1d',  weight: 5 },
-  { interval: '1w',  label: '1w',  weight: 6 },
+  { interval: '6h',  label: '6h',  weight: 5 },
+  { interval: '12h', label: '12h', weight: 6 },
+  { interval: '1d',  label: '1d',  weight: 7 },
+  { interval: '3d',  label: '3d',  weight: 8 },
+  { interval: '1w',  label: '1w',  weight: 9 },
+  { interval: '1M',  label: '1M',  weight: 10 },
 ]
 
 function MTFPanel({ symbol }: { symbol: string }) {
@@ -82,12 +86,17 @@ function MTFPanel({ symbol }: { symbol: string }) {
   const { data: k30m } = useKlines(symbol, '30m', 200)
   const { data: k1h }  = useKlines(symbol, '1h',  200)
   const { data: k4h }  = useKlines(symbol, '4h',  200)
+  const { data: k6h }  = useKlines(symbol, '6h',  200)
+  const { data: k12h } = useKlines(symbol, '12h', 200)
   const { data: k1d }  = useKlines(symbol, '1d',  200)
+  const { data: k3d }  = useKlines(symbol, '3d',  150)
   const { data: k1w }  = useKlines(symbol, '1w',  100)
+  const { data: k1M }  = useKlines(symbol, '1M',  60)
 
   const consensus = useMemo(() => {
     const byInterval: Record<string, typeof k1h> = {
-      '15m': k15m, '30m': k30m, '1h': k1h, '4h': k4h, '1d': k1d, '1w': k1w,
+      '15m': k15m, '30m': k30m, '1h': k1h, '4h': k4h,
+      '6h': k6h, '12h': k12h, '1d': k1d, '3d': k3d, '1w': k1w, '1M': k1M,
     }
     const entries = MTF_OPTIONS
       .filter((tf) => selected.includes(tf.interval))
@@ -99,7 +108,7 @@ function MTFPanel({ symbol }: { symbol: string }) {
       .filter((e): e is NonNullable<typeof e> => e !== null)
     if (entries.length < 2) return null
     return calcMTFConsensus(entries)
-  }, [selected, k15m, k30m, k1h, k4h, k1d, k1w])
+  }, [selected, k15m, k30m, k1h, k4h, k6h, k12h, k1d, k3d, k1w, k1M])
 
   function toggleTF(interval: KlineInterval) {
     setSelected((prev) => {
@@ -125,7 +134,7 @@ function MTFPanel({ symbol }: { symbol: string }) {
     .map((tf) => `${tf.label}×${tf.weight}`)
     .join(', ')
 
-  const gridCols = selected.length <= 2 ? 'grid-cols-2' : selected.length === 3 ? 'grid-cols-3' : 'grid-cols-2 sm:grid-cols-4'
+  const gridCols = selected.length <= 2 ? 'grid-cols-2' : selected.length === 3 ? 'grid-cols-3' : selected.length === 4 ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3 sm:grid-cols-5'
 
   if (!consensus) {
     return (

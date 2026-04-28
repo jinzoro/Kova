@@ -551,22 +551,33 @@ The app calculates signal scores across multiple timeframes and combines them in
 
 ### Available Timeframes
 
-| Timeframe | Weight | Candles Fetched | Best For |
-|---|---|---|---|
-| 15m | ×1 | 200 (~2 days) | Short-term timing, scalping context |
-| 30m | ×2 | 200 (~4 days) | Intraday swing context |
-| 1h | ×3 | 200 (~8 days) | Short-swing entries and exits |
-| 4h | ×4 | 200 (~33 days) | Intermediate trend confirmation |
-| 1d | ×5 | 200 (~6.5 months) | Primary trend direction |
-| 1w | ×6 | 100 (~1.9 years) | Macro bias and long-term structure |
+| Timeframe | Weight | Candles Fetched | Category | Best For |
+|---|---|---|---|---|
+| 15m | ×1 | 200 (~2 days) | Short-term | Scalping context, intraday timing |
+| 30m | ×2 | 200 (~4 days) | Short-term | Intraday swing context |
+| 1h | ×3 | 200 (~8 days) | Short-term | Short-swing entries and exits |
+| 4h | ×4 | 200 (~33 days) | Midterm | Swing trade direction |
+| 6h | ×5 | 200 (~50 days) | Midterm | Broader intraday trend |
+| 12h | ×6 | 200 (~100 days) | Midterm | Half-day momentum, swing confirmation |
+| 1d | ×7 | 200 (~6.5 months) | Midterm/Long | Primary trend direction |
+| 3d | ×8 | 150 (~15 months) | Long-term | Multi-day swing structure |
+| 1w | ×9 | 100 (~1.9 years) | Long-term | Macro bias and long-term structure |
+| 1M | ×10 | 60 (~5 years) | Long-term | Monthly macro cycle, position trading |
 
-Higher weights mean the timeframe has more influence on the consensus score. Weekly and daily signals outweigh shorter-term noise.
+Higher weights mean the timeframe carries more influence on the consensus score — monthly and weekly signals outweigh intraday noise.
 
 ### Default Selection
 
-The panel defaults to **1h, 4h, and 1d** — the most useful combination for swing trading. Select any two or more timeframes using the toggle buttons at the top of the panel.
+The panel defaults to **1h, 4h, and 1d** — a balanced starting point for swing trading. Toggle any combination using the pill buttons at the top of the panel.
 
-> Minimum 2 timeframes required. All timeframe data is prefetched in the background so switching between combinations is instant.
+**Example combinations:**
+- Short-term: `15m + 30m + 1h`
+- Swing trading: `1h + 4h + 1d` *(default)*
+- Midterm: `4h + 12h + 1d + 3d`
+- Long-term macro: `1d + 1w + 1M`
+- Full spectrum: select all 10
+
+> Minimum 2 timeframes required. All timeframe data is prefetched in the background so switching combinations is instant.
 
 ### Consensus Levels
 
